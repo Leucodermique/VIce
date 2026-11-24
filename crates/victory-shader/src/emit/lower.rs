@@ -5893,6 +5893,12 @@ impl<'a> Lower<'a> {
                 // only for its 2D dimensions (width/height/levels, without
                 // reading depth/layers in dword 4), such as `PS_PuddleDetect`.
                 (src, used, false, (2, 0x409), Some(2))
+            } else if count == 8 && used.is_none_or(|u| u.kind == ResourceType::Srv) {
+                // An image the program only measures (it reads the size bits of a
+                // descriptor nothing samples): eight dwords are an image descriptor,
+                // taken here as 2D (upstream 6119c21).
+                // shortcut: a 3D or array image would report depth or layers 1.
+                (src, used, false, (2, 0x409), Some(2))
             } else {
                 if std::env::var_os("VICTORY_DESC_WHY").is_some() {
                     eprintln!(
