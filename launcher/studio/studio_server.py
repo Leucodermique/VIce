@@ -578,7 +578,8 @@ def launch_game(cfg, developer):
         env["VICTORY_CARD_BUFFERS_MIN_MB"] = "1"
         env["VICTORY_CARD_BUFFERS_MB"] = "512"
         env["VICTORY_TEXTURE_ROOM_PERCENT"] = "94"
-        env["VICTORY_CARD_ROOM_FOR_TARGETS_MB"] = "1536"
+        env["VICTORY_TEXTURE_SPILL_PERCENT"] = "0" if console == "series-s" else "10"
+        env["VICTORY_CARD_ROOM_FOR_TARGETS_MB"] = "1024" if console == "series-s" else "1536"
         env["VICTORY_PIPELINE_COMMIT_MB"] = "768"
         env["VICTORY_PIPELINE_WAIT_MS"] = "500"
     else:
@@ -591,7 +592,8 @@ def launch_game(cfg, developer):
         env["VICTORY_CARD_BUFFERS_MIN_MB"] = "16"
         env["VICTORY_CARD_BUFFERS_MB"] = "512"
         env["VICTORY_TEXTURE_ROOM_PERCENT"] = "94"
-        env["VICTORY_CARD_ROOM_FOR_TARGETS_MB"] = "1536"
+        env["VICTORY_TEXTURE_SPILL_PERCENT"] = "0" if console == "series-s" else "10"
+        env["VICTORY_CARD_ROOM_FOR_TARGETS_MB"] = "1024" if console == "series-s" else "1536"
         env["VICTORY_PIPELINE_COMMIT_MB"] = "768"
         env["VICTORY_PIPELINE_WAIT_MS"] = "500"
 
