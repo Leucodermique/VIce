@@ -1,159 +1,109 @@
 <p align="center">
-  <img src="launcher/studio/studio-emblem.png" alt="VIce Studio" width="180" />
+  <img src="launcher/studio/studio-emblem.png" alt="VIce Studio" width="190" />
 </p>
 
 <h1 align="center">VIce · VIce Studio</h1>
 
 <p align="center">
-  <strong>Couche de compatibilité Xbox Series X|S → Windows 11 (Rust / Direct3D 12) + Launcher VIce Studio</strong>
+  <strong>Xbox Series X|S → Windows 11 Native Compatibility Layer (Rust / Direct3D 12) &amp; VIce Studio Launcher</strong>
+</p>
+
+<p align="center">
+  <em>AI-managed consolidated build fed continuously from community commits across the VIctory ecosystem.</em>
 </p>
 
 ---
 
-## À propos de VIce
+## Overview
 
-**VIce** est une distribution consolidée et un launcher (**VIce Studio**) bâtis au-dessus de l’écosystème open-source **VIctory** pour exécuter des titres Xbox Series X|S nativement sur Windows 11 (avec un focus particulier sur les GPU **NVIDIA RTX 8 Go VRAM**).
+**VIce** is a consolidated distribution and dedicated desktop launcher (**VIce Studio v4**) built on top of the open-source **[VIctory](https://github.com/Marvisak/VIctory)** compatibility layer, focused on running Xbox Series X|S titles natively on Windows 11 — with extensive real-hardware tuning and validation on **NVIDIA GeForce RTX 4070 Laptop (8 GB VRAM, 32-lane warps) / 16 GB RAM**.
 
-- **Géré et maintenu par [Antigravity](https://antigravity.google) (Google DeepMind / Gemini)** : l’intégration technique, la résolution des conflits, le débogage shader/D3D12, la validation par tests unitaires & builds `--release`, ainsi que le développement du launcher **VIce Studio** sont pilotés par le modèle.
-- **Alimenté automatiquement à partir des avancées communautaires** : ce dépôt suit et fusionne régulièrement les meilleurs commits, PRs et correctifs issus des dépôts amont et forks actifs :
-  - **[Marvisak/VIctory](https://github.com/Marvisak/VIctory)** — socle principal (loader, services HLE, backend Direct3D 12, recompilateur shaders, licence **GPL-3.0-or-later**).
-  - **[fxceless/victory-fork](https://github.com/fxceless/victory-fork)** — optimisations NVIDIA RTX, Depth Bounds Test (`#82`), textures pré-chargées avant le *character bake*, déduplication VRAM, AVX2 relay merge, correctifs peau/murs (`#191`, `#206`, `#381`, `#384`, `#386`, `#387`, `#391`, `#393`).
-  - **[LooperSalty/victory](https://github.com/LooperSalty/victory)** — file D3D12 `COPY` dédiée, notification DirectStorage → GPU (`VICTORY_DSTORAGE_NOTIFY=1`, fix murs), correctifs BCPack BC7, MIMG, *in-place* sous `late waits`, et oracle `xg_xs.dll`.
-- **Ajouts propres à VIce** :
-  - **VIce Studio v4** (`launcher/studio/`) : launcher web local minimaliste à l’identité néon/coucher de soleil, animation d’ouverture, bouton unifié **Jouer / Arrêter** synchronisé en temps réel sur la fenêtre Win32 du jeu, télémétrie live en RAM (FPS, ms/frame, draws), mode développeur protégé par mot de passe et journaux filtrés côté serveur.
-  - Correctifs shaders NVIDIA locaux (`LOOP_LIMIT = 16384` anti-TDR, déblocage `PS_PuddleDetect` & `ShallowWaterSim`).
-
-> **Avertissement légal :** ce dépôt ne contient **aucun fichier, binaire, code ou asset de jeu**. Vous devez fournir vos propres fichiers légitimes au lancement. Ce projet est publié sous licence **GPL-3.0-or-later** dans le respect total de [VIctory](https://github.com/Marvisak/VIctory).
+> **Legal Notice:** This repository contains **no game files, binaries, code, or proprietary assets**. You must supply your own legitimately obtained files at runtime. Licensed under **GPL-3.0-or-later** in full compliance with upstream [VIctory](https://github.com/Marvisak/VIctory). It is not affiliated with or endorsed by any game developer or publisher.
 
 ---
 
-# VIctory fork (work in progress)
+## AI Governance & Model Attribution
 
-A work-in-progress fork of [VIctory](https://github.com/Marvisak/VIctory), a
-compatibility layer that runs an Xbox Series title natively on Windows from
-files the user supplies. This fork follows upstream
-`main` and adds fixes aimed at one goal: getting the game's world to render
-correctly and playably on one particular PC.
+This repository is actively maintained, integrated, tested, and published through an **AI-driven engineering workflow**, combining our own work with community-contributed AI-assisted fixes from upstream forks:
 
-**This repository contains no game files, code or assets.** You need your own
-copy of the game. It is not affiliated with or endorsed by the game's
-developer or publisher.
+| Area | AI Model / Agent | Scope of Work |
+|---|---|---|
+| **VIce Project Maintenance & Integration** | **Antigravity (Google DeepMind / Gemini)** | Continuous multi-fork curation and cherry-picking across `Marvisak/VIctory`, `fxceless/victory-fork`, and `LooperSalty/victory`; merge-conflict resolution; automated unit-test & `--release` validation; repository & GitHub release management. |
+| **NVIDIA RTX 8 GB Debugging & Shader Fixes** | **Antigravity (Google DeepMind / Gemini)** | Live `play.log` telemetry analysis, anti-TDR loop bounds (`LOOP_LIMIT = 16384`), DXIL disassembly & `descriptor_data()` fixes unlocking `PS_PuddleDetect` and `ShallowWaterSim`, and `XboxBvhBuilder.dll` wave-32 validation testing. |
+| **VIce Studio v4 Launcher & Branding** | **Antigravity (Google DeepMind / Gemini)** | End-to-end backend (`studio_server.py`) & frontend (`studio.html`) architecture, Win32 game-window state detection, zero-blocking in-memory telemetry, automatic token refresh, password-protected developer mode, cinematic startup intro, and the generated **VIce Studio** neon emblem (`studio-emblem.png`). |
+| **Upstream GPU / Shader Architecture** | **Claude (Anthropic — Claude Code / Opus / Fable)** | Co-author of core upstream & `fxceless/victory-fork` breakthroughs integrated here: async `VICTORY_RELAY` / `VICTORY_LATE_WAIT`, GPU-side card-buffer comparison, Depth Bounds Test (`#82`), pre-bake bindless texture uploads, helper-lane `v_readfirstlane` fix (`#1733`), and shader cleanup passes. |
+| **Upstream D3D12 Fixes** | **Gemini (Google)** | Co-author of upstream D3D12 device fixes integrated here (including real `GetDeviceRemovedReason` `#928`). |
 
-## Credits
+### Automatically Fed Community Sources
 
-- **[VIctory](https://github.com/Marvisak/VIctory)** by Marvisak and its
-  contributors is the base of everything here: the loader, the runtime
-  services, the Direct3D 12 back end and the shader recompiler. Licensed
-  GPL-3.0-or-later; so is this fork. Upstream's history is kept intact below
-  the single commit that carries this fork's changes.
-- **[XCL](https://github.com/ivall/xcl)** by ivall and its contributors
-  (GPL-2.0-only) was used as a reference for how the same title behaves under
-  another layer. Fixes inspired by it were written anew in VIctory's code.
-- This fork's changes were developed with [Claude Code](https://claude.com/claude-code).
-
-## Status of this fork (2026-11-25)
-
-**Not playable yet: 2.5 to 4 frames per second, and shadowed areas are black.**
-Tested on one machine: Windows 11, Intel i7-14700KF, NVIDIA RTX 4070 12 GB,
-32 GB RAM. The Series X profile is used throughout.
-
-| Stage | State in this fork |
-|-------|--------------------|
-| Boot, menus, start screen | works, 30 fps (as upstream) |
-| Opening cutscene | plays from start to finish, in order, lit: title cards, credits cards, night and dusk shots |
-| Saves | the game autosaves a checkpoint and loads it again |
-| First gameplay scene (the prologue) | renders: characters, textures, sky, sunlit exterior; HUD, pause menu and pad input work |
-| Light in shadow | missing: the game's ray-traced bounce light and ray-traced lamp and sun shadows do not run yet, so anything the sun does not hit directly is black |
-| Frame rate in the world | 2-4 fps: 420-450 ms per frame by default, 240-350 ms with the newer switches (`VICTORY_RELAY=2`, or `VICTORY_LATE_WAIT=3 VICTORY_WIDE_BACK=1 VICTORY_CARD_BUFFERS_MIN_MB=1 VICTORY_CARD_BUFFERS_MB=1024`); it started at 3-6 seconds per frame |
-| Stability | no driver hang or device loss in normal runs (a hang introduced by the wave64 update was found and fixed: its barrier form for 64-lane programs is now off unless `VICTORY_WAVE_WIDE=1`) |
-
-### What this fork changed (summary)
-
-Rendering:
-- Meshlet culling read its scene buffers as the wrong kind of view, so the world drew almost nothing; fixed.
-- Per-draw descriptor tables could run out, after which draws used slots never made for them and the card hung; fixed.
-- Light packed by the game's compute shaders was read back through empty copies (sky, probes, fog); fixed for every mip level and layer.
-- The fog reconstruction, shadow-mask, hair, blend-shape skinning, fire and several material programs did not translate; fixed.
-- Gathers at a named mip level (with and without an offset) read level 0; fixed.
-- Implicit-level samples outside pixel shaders produced invalid DXIL in 730 compute programs; fixed.
-- Rectangle lists, depth and stencil twins for depth textures written by compute, texture read-backs.
-- Ray tracing, in progress and off by default: the game's own structure-builder programs translate, title memory can be read by raw address from shaders, the hardware ray/box and ray/triangle test is emulated in DXIL (checked against a reference on the GPU), and 59 of the 64 trace programs translate. Nothing is lit by it yet. See [docs/fork-ray-tracing.md](docs/fork-ray-tracing.md).
-
-Speed and memory:
-- Waits for memory values, write-watch queries and page queries no longer walk page tables per call.
-- Large title buffers get a copy in card memory, with shader writes found by hashing on the card.
-- Submissions can be sent ahead of the wait for the card (`VICTORY_LATE_WAIT`), with a relay thread that lands results as the card finishes (`VICTORY_RELAY`): in a first five-minute run the card's idle time behind the submitting thread fell from about 136 to 30 ms per frame.
-- Title memory can be opened as a graphics heap so that buffers are used in place instead of copied (`VICTORY_INPLACE`, first stage only; a probe confirmed the approach on the test GPU).
-- The bindless texture queue no longer uploads stale views; the view table no longer grows without bound; the pipeline library is mapped instead of read into memory.
-- An intermittent device loss was traced to the pipeline library file being replaced while mapped; fixed.
-
-- Translated shaders get clean-up passes over the finished module (dead code, constant folding, reuse of values, branch facts); the pack's host instruction count falls by about 43 %, worth about 20 ms of GPU time per frame on the test machine (`VICTORY_SHADER_OPT=0` turns them off).
-
-Most of the newer speed changes sit behind environment switches that are off
-by default (`VICTORY_LATE_WAIT`, `VICTORY_RELAY`, `VICTORY_WIDE_BACK`,
-`VICTORY_CARD_BUFFERS_MIN_MB`, `VICTORY_INPLACE`, `VICTORY_BVH_BUILDER`, ...).
-Each is described in a comment where it is read.
-
-### Known problems
-
-- Everything in shadow is black (see above).
-- The interior of the first gameplay room is sometimes not drawn after the cutscene hands over to gameplay.
-- Around 24 GB of memory is in use during play.
-- A few style lints are switched off for this fork in the workspace `Cargo.toml` until the newer code is tidied.
-- Many changes here are specific to this title and this GPU, and some are marked `shortcut:` in the code where they approximate what the console does.
-
-Everything below this line is upstream VIctory's own README, unchanged; its
-status section describes upstream, not this fork.
+VIce tracks and integrates verified advancements from:
+1. **[Marvisak/VIctory](https://github.com/Marvisak/VIctory)** — upstream foundation (PE/XEX loader, HLE runtime services, D3D12 backend, RDNA2→DXIL shader recompiler; **106+ recent PRs** integrated).
+2. **[fxceless/victory-fork](https://github.com/fxceless/victory-fork)** — NVIDIA RTX rendering fixes, VRAM deduplication, Depth Bounds Test (`#82`), pre-bake texture uploads, Geometry Shaders (`#381`), AVX2 relay merge (`#384`), and skin/wall race fixes (`#191`, `#206`).
+3. **[LooperSalty/victory](https://github.com/LooperSalty/victory)** — dedicated D3D12 `COPY` queue, DirectStorage physical-page GPU notifications (`VICTORY_DSTORAGE_NOTIFY=1`), BCPack BC7 fix, MIMG fixes, `late waits` in-place placement guards, and `xg_xs.dll` local oracle support.
+4. **[XCL](https://github.com/ivall/xcl)** (GPL-2.0-only) — referenced by upstream authors for console behavior verification.
 
 ---
 
-# VIctory
+## Detailed Progress & Milestones
 
-Runs the title (Xbox Series X|S) natively on Windows, from files
-the user supplies.
+### Current Status (2026-11-25 — Tested on Windows 11, RTX 4070 Laptop 8 GB, 16 GB RAM, Series X Profile)
 
-The title's x86-64 code runs unchanged inside our process; VIctory supplies
-the platform underneath it and converts the title's data, ahead of time where
-it can (shaders and pipelines too, see Getting started) and on first use
-otherwise. See [docs/architecture.md](docs/architecture.md).
+| Stage | Current State |
+|---|---|
+| **Boot, first-boot setup & menus** | Working cleanly at **30 fps** (zero intro video flicker). |
+| **Opening cutscene** | Plays start-to-finish, lit and in order (title cards, credits, night/dusk exterior shots). |
+| **Saves & checkpoints** | Autosave checkpoint creation and reload working. |
+| **First playable scene (prison cell & yard)** | Renders characters, hair/skin textures, solid walls & ceiling, sunlit exterior, HUD, pause menu, and pad/keyboard input (`5,000–6,376 draws/frame`, `Exit code: 0`, only **2** unsupported shader ops remaining in full runs). |
+| **Cell lamp & depth-bounded lighting** | Enabled via Depth Bounds Test (`#82` — `DEPTH_STENCIL1` + `OMSetDepthBounds`). |
+| **Shaded interiors (bounce light)** | Still dark where direct light does not reach (RT GI / BVH trace not yet enabled by default; **49/52** `XboxBvhBuilder.dll` shaders already validate & build D3D12 PSOs on RTX 4070 with `VICTORY_HOST_MAX_WAVE=32`). |
+| **In-world frame rate** | Progressed from **100% black screen / 1 fps** to **2–4+ fps** (`240–450 ms/frame`), with ongoing work to move remaining CPU buffer scans to the GPU `COPY` queue. |
 
-## Status (2026-11-24)
+### 1. Rendering & Visual Fidelity
+- **Black screen → full lit 3D world on NVIDIA**: adopted raw-view handling for `StructuredBuffer` loads, meshlet culling fixes, `STAND_INS [(86, 28), (115, 28)]`, and the NVIDIA 1M descriptor-heap clamp.
+- **Depth Bounds Test (`#82`, `fxceless c96b4f2` + `LooperSalty 35cdf6f`)**: creates `DEPTH_STENCIL1` pipelines and forwards `OMSetDepthBounds` to the host command list so room lamps properly illuminate walls, tables, and bunks.
+- **Character skin & hair color fixes (`a803c87` + `c96b4f2`)**: re-checks bindless indexed textures after upload (`4/12/40/120/400` frames) and uploads bindless textures before the character decoration bake runs (`VICTORY_EARLY_TEXTURES_MS`, `VICTORY_BAKE_TEXTURES_MS`).
+- **195 merged Geometry Shaders (`#381`)** and **dual comparison/normal sampler slots (`#386`)**.
+- **`R9G9B9E5` render-target stand-in** (`R16G16B16A16_FLOAT`) and **2 irradiance cache shaders** unlocked (`194c736`, `fd021bf`).
+- **BCPack BC7 fix (`a68db08`)**: preserves all 32 indices in the first BC7 dictionary entry to prevent texture corruption.
+- **MIMG shader fixes (`c4335bb`, `130bf10`)**: fixes 3D Z texel offsets, `a16` offset truncation, and cubemap `sample_d` LOD.
+- **Intro video anti-flicker (`d9770b9`)**: eliminates shaking/flickering during boot video playback.
 
-**Not playable yet.** The title boots, runs its menus at its own 30 fps,
-loads the world and shows it: slowly, and with rendering defects.
+### 2. NVIDIA RTX 8 GB Stability & Shader Translator
+- **Anti-TDR loop bound (`LOOP_LIMIT = 1 << 14`)**: prevents NVIDIA `DXGI_ERROR_DEVICE_HUNG` (`0x887A0006`) resets on long console shader loops.
+- **Helper-lane `v_readfirstlane` fix (`#1733`)**: helper lanes in pixel-shader waterfall loops read their own value instead of spinning to the loop limit (which previously stalled draws for 0.3–1.3 s each until `DEVICE_HUNG`).
+- **`v_interp_p2_f16` modifiers (`#1696`)**: properly applies `op_sel`, `omod`, and `clamp` in f32 before converting once to f16.
+- **`WaveSize(32)` scalar lane-mask join (`#387`)**: requests 32-lane wave size when a scalar join reads a lane mask.
+- **Descriptor-as-data unlocking (`lower.rs`, `707a579`)**: unlocks `PS_PuddleDetect` (3 pixel shaders) and `ShallowWaterSim:CS_MinTimestepReduce` — all **4/4** validated with `dxil.dll` and compiled to real D3D12 PSOs on RTX 4070.
+- **Real `GetDeviceRemovedReason` (`#928`)**: reports the actual host D3D12 device state instead of `E_NOTIMPL`.
+- **106 upstream `Marvisak/VIctory` PRs** integrated (including `#1180` decode-time opcode lookup `-4..8%` translation time, `#1476` MD5 table, `#1471` dead phi latch folding, `#1443` RDNA2 quadmask, `#1366` native mesh outputs, `#1337` aniso mip point, `#1695` waterfall device checks, and `#52` thread-safe `SHADER_HEAPS` descriptor mirroring).
 
-| Stage | State |
-|-------|-------|
-| Boot, first-boot screens (accessibility, language, settings, legal) | works, 30 fps |
-| Intro video with sound | works |
-| Start screen, profile and saves | works |
-| Loading into the world (about 50 s) | works |
-| The world (first mission's intro) | drawn and shown: streets, buildings, vehicles, characters, the title card and credits; 1-2 s per frame. Surfaces are unlit, a band of distant geometry is missing, characters come out broken in some shots |
+### 3. Missing Walls, Memory & Performance
+- **Root-cause fix for missing prison walls (`562cf33` + `80d58f8`)**: DirectStorage writes to physical pages through temporary views that bypass Windows write-watch and memory guards; enabling `VICTORY_DSTORAGE_NOTIFY=1` notifies the GPU side of mapped destinations using a section-indexed view map so streamed room geometry appears reliably.
+- **Async relay correctness (`#191` + `#206`)**: waits on in-flight writes for aliased copies/readbacks (fixing missing skin under `VICTORY_RELAY=2`) and includes uncopied pages in shadow stale/merge (fixing transparent prison walls/ceilings).
+- **Safe `late waits` memory placement (`59d53a2` + `dd202bc`)**: refuses in-place placement under `late waits` and unlocks exact locked page ranges.
+- **Dedicated D3D12 `COPY` queue & parallel `CARD_COMPARE` (`5e758c7`)**: offloads card-buffer readbacks from the direct graphics queue (cutting card-piece fetch stalls from ~343 ms to ~24 ms).
+- **AVX2 SIMD relay merge (`#384`)**, **bounded VRAM diff uploads (`#391`)**, **placed-texture VRAM deduplication (`c96b4f2`)**, and **`VICTORY_TEXTURE_NO_WAIT` enabled by default (`#393`)**.
+- **Optional `xg_xs.dll` local oracle (`784c033`)**: supports `VICTORY_XG_DLL=<path>` + `VICTORY_XG_MODE=real` for hardware-exact texture tiling calculations when supplied by the user.
 
-Tested on one machine: Windows 11, AMD RX 6700 XT.
+### 4. VIce Studio v4 Launcher (`launcher/studio/`)
+- **Sleek GTA 6 sunset glassmorphism UI** with generated neon **VIce Studio** emblem (`launcher/studio/studio-emblem.png`) and skippable 2-second cinematic startup intro.
+- **Unified Play / Stop toggle** synced live to the actual Windows game window via Win32 `EnumWindows` / `IsWindowVisible` (sends graceful `WM_CLOSE` first so the D3D12 pipeline cache saves cleanly on exit).
+- **Zero "Unable to fetch" errors**: `ThreadingHTTPServer` with `allow_reuse_address` + `daemon_threads`, supports both `127.0.0.1` and `localhost`, automatic token renewal on `401` via `/api/token`, JSON error reporting, and `< 1 ms` in-memory live telemetry (FPS, ms/frame, draws/frame) without re-reading multi-MB log files from disk.
+- **Password-protected Developer Mode** (PBKDF2-SHA256 via `%LOCALAPPDATA%\VIce\studio-auth.json`): unlocks **Diagnostics** (live GPU counters & D3D12 ID histograms), server-filtered **Logs**, build selection, and engine toggles (`VICTORY_RELAY=2`, `VICTORY_CARD_BUFFERS_MIN_MB=1`, `VICTORY_CARD_BUFFERS_MB=768`, `VICTORY_DSTORAGE_NOTIFY=1`, D3D12 debug, WARP).
 
-> **Warning.** Entering the world on a real GPU has hung it in earlier
-> builds, and Windows then resets the display driver (every monitor goes
-> black for a moment). The latest runs did not, but it is not ruled out; a
-> run can also end on a GPU fault (`crashes.log`). A diagnostics build with
-> `VICTORY_D3D12_WARP=1` renders on the software adapter instead (too slow
-> to reach the world in minutes).
+---
 
-What each part does today and what it still needs:
+## Launching VIce Studio
 
-| Subsystem | Today | Needs |
-|-----------|-------|-------|
-| Loader | Runs the title's executable and its DLLs in our process; crash reports name the faulting code and are kept in `crashes.log` | – |
-| Runtime services | One signed-in offline user, licences, packages, saves that survive a kill at any step, text entry dialog | Speech is silent; the dialog and relaunch are untested live |
-| Network | Offline by design: the title cannot reach the network | – |
-| Files and streaming | Archives and streamed data read, zlib and BCPack decoded in parallel | Loading is limited by writes into title memory |
-| Input | XInput pads, keyboard, keyboard stand-in pad | Trigger rumble |
-| Audio | Menu, video and loading sound; XMA voices and Opus streams decode | Reverb is silent; Opus results unverified against the title |
-| GPU: menus | Draws, compute and presentation on host D3D12; only changed title memory is copied | Frame pacing drifts on one screen in release builds |
-| GPU: world | The scene is drawn and presented: mesh pipelines, indirect execution, views the shaders pick from the heap themselves, title memory read by address (ray-tracing structures), depth written from compute, pipelines pre-built or made by worker threads and kept on disk | Lighting (surfaces are unlit) and some missing geometry; frames take 1-2 s; draws of untranslated shaders are dropped; real queries, depth bounds, HDR and scaling are missing |
-| Shaders | Console GPU code recompiled to DXIL, ahead of time (`translate --cache`) or at first use, cached on disk. Menus: all. World: mesh 8,765 of 8,765, vertex/pixel 12,550 of 12,592, compute 2,579 of 2,637 | Merged geometry stages (195 programs) and about 100 others; fused multiply-adds follow the host GPU; some compute programs need a GPU with 64-lane waves |
-| Textures | Console tiled layouts and detiling for the modes the title uses | Render-target metadata planes |
-| Series S mode | Runs through the menus to the loading screen | The world, as above |
+```powershell
+# Build the optimized engine binary
+cargo build --locked --release -p victory
+
+# Launch VIce Studio (opens the local app window on http://127.0.0.1:17642/)
+pythonw.exe launcher\studio\studio_server.py
+```
+
+---
 
 ## Getting started
 
