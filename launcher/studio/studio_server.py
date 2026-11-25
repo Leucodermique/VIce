@@ -532,21 +532,28 @@ def launch_game(cfg, developer):
     dstorage_notify = bool(cfg.get("dstorageNotify", True)) if developer else True
 
     if fast_gpu:
-        env["VICTORY_RELAY"] = "2"
+        # RELAY=1 keeps async copy-back without stage-2 races that drop character skin/walls (#89/#168).
+        env["VICTORY_RELAY"] = "1"
         env["VICTORY_WIDE_BACK"] = "1"
+        env["VICTORY_CARD_REHASH_RUNS"] = "1"
         env["VICTORY_LATE_WAIT_LISTS"] = "512"
         env["VICTORY_CARD_BUFFERS_MIN_MB"] = "1"
         env["VICTORY_CARD_BUFFERS_MB"] = "512"
         env["VICTORY_TEXTURE_ROOM_PERCENT"] = "94"
-        env["VICTORY_TEXTURE_SPILL_PERCENT"] = "80"
+        env["VICTORY_TEXTURE_SPILL_PERCENT"] = "68"
+        env["VICTORY_PIPELINE_COMMIT_MB"] = "768"
+        env["VICTORY_PIPELINE_WAIT_MS"] = "1000"
     else:
         env["VICTORY_RELAY"] = "0"
         env["VICTORY_WIDE_BACK"] = "0"
+        env["VICTORY_CARD_REHASH_RUNS"] = "1"
         env["VICTORY_LATE_WAIT_LISTS"] = "128"
         env["VICTORY_CARD_BUFFERS_MIN_MB"] = "16"
         env["VICTORY_CARD_BUFFERS_MB"] = "512"
         env["VICTORY_TEXTURE_ROOM_PERCENT"] = "94"
-        env["VICTORY_TEXTURE_SPILL_PERCENT"] = "80"
+        env["VICTORY_TEXTURE_SPILL_PERCENT"] = "68"
+        env["VICTORY_PIPELINE_COMMIT_MB"] = "768"
+        env["VICTORY_PIPELINE_WAIT_MS"] = "1000"
 
     env["VICTORY_DSTORAGE_NOTIFY"] = "1" if dstorage_notify else "0"
 

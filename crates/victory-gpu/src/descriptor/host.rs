@@ -364,6 +364,13 @@ struct Waiting {
     /// the fingerprint it had at the upload, how many looks found it
     /// unchanged, and the frame of the upload. A fingerprint of 0: none.
     checked: (u64, u64, u64, u8, u64),
+    /// While the card has no room for new textures (`!room`), a refused slot
+    /// yields until this frame so a fixed prefix cannot starve remapped,
+    /// recheck, or streamed-out slots behind it. Ignored as soon as room
+    /// returns.
+    refused_until: u64,
+    /// Consecutive refusals while the card was full (for backoff).
+    full_waits: u8,
 }
 
 /// The queue of title slots whose texture view waits to be brought up to
@@ -386,7 +393,19 @@ impl TextureQueue {
         }
         self.writes += 1;
         let write = self.writes;
-        self.slots.insert(index, Waiting { due, written: frame, write, looks: 0, mapped: 0, checked: (0, 0, 0, 0, 0) });
+        self.slots.insert(
+            index,
+            Waiting {
+                due,
+                written: frame,
+                write,
+                looks: 0,
+                mapped: 0,
+                checked: (0, 0, 0, 0, 0),
+                refused_until: 0,
+                full_waits: 0,
+            },
+        );
     }
 
     fn remove(&mut self, index: u32) {
@@ -403,26 +422,69 @@ impl TextureQueue {
     ///   25,000-40,000 while the textures of the shot on screen waited
     ///   (run 52: 98% of the drawn pixels had no colour texture in the
     ///   first 3D frames).
+    #[cfg_attr(not(test), allow(dead_code))]
     fn due(&self, frame: u64, max: usize) -> Vec<(u32, u64)> {
-        let mut again: Vec<(u64, u32, u64)> = Vec::new();
+        self.due_for(frame, max, true)
+    }
+
+    /// As [`TextureQueue::due`], with `room` saying whether the card can
+    /// allocate new textures. When `!room`, slots already uploaded
+    /// (rechecks and partly-mapped uploads) come first, followed by fresh
+    /// / remapped writes and then unuploaded `again` slots, and slots
+    /// recently refused while full (`refused_until > frame`) yield so a
+    /// fixed prefix cannot starve later slots behind the `refused > 256`
+    /// cap. As soon as `room` is true, `refused_until` is ignored.
+    fn due_for(&self, frame: u64, max: usize, room: bool) -> Vec<(u32, u64)> {
+        let newest_first = |a: &(u64, u32, u64), b: &(u64, u32, u64)| b.2.cmp(&a.2);
+        let push_interleaved = |fresh: &[(u64, u32, u64)], order: &mut Vec<(u32, u64)>| {
+            let (mut new, mut old) = (0, fresh.len());
+            while new < old && order.len() < max {
+                order.push((fresh[new].1, fresh[new].2));
+                new += 1;
+                if new < old && order.len() < max {
+                    old -= 1;
+                    order.push((fresh[old].1, fresh[old].2));
+                }
+            }
+        };
+        if room {
+            let mut again: Vec<(u64, u32, u64)> = Vec::new();
+            let mut fresh: Vec<(u64, u32, u64)> = Vec::new();
+            for (&index, w) in self.slots.iter().filter(|(_, w)| w.due <= frame) {
+                let class = if w.looks > 0 || w.mapped > 0 { &mut again } else { &mut fresh };
+                class.push((w.written, index, w.write));
+            }
+            again.sort_unstable_by(newest_first);
+            fresh.sort_unstable_by(newest_first);
+            let mut order: Vec<(u32, u64)> = again.iter().map(|&(_, index, write)| (index, write)).collect();
+            push_interleaved(&fresh, &mut order);
+            order.truncate(max);
+            return order;
+        }
+        let mut active: Vec<(u64, u32, u64)> = Vec::new();
         let mut fresh: Vec<(u64, u32, u64)> = Vec::new();
-        for (&index, w) in self.slots.iter().filter(|(_, w)| w.due <= frame) {
-            let class = if w.looks > 0 || w.mapped > 0 { &mut again } else { &mut fresh };
+        let mut waiting: Vec<(u64, u32, u64)> = Vec::new();
+        for (&index, w) in self
+            .slots
+            .iter()
+            .filter(|(_, w)| w.due <= frame && w.refused_until <= frame)
+        {
+            let class = if w.checked.2 != 0 || w.mapped > 0 {
+                &mut active
+            } else if w.looks == 0 {
+                &mut fresh
+            } else {
+                &mut waiting
+            };
             class.push((w.written, index, w.write));
         }
-        // By the number of the write, counted over the run.
-        let newest_first = |a: &(u64, u32, u64), b: &(u64, u32, u64)| b.2.cmp(&a.2);
-        again.sort_unstable_by(newest_first);
+        active.sort_unstable_by(newest_first);
         fresh.sort_unstable_by(newest_first);
-        let mut order: Vec<(u32, u64)> = again.iter().map(|&(_, index, write)| (index, write)).collect();
-        let (mut new, mut old) = (0, fresh.len());
-        while new < old && order.len() < max {
-            order.push((fresh[new].1, fresh[new].2));
-            new += 1;
-            if new < old && order.len() < max {
-                old -= 1;
-                order.push((fresh[old].1, fresh[old].2));
-            }
+        waiting.sort_unstable_by(newest_first);
+        let mut order: Vec<(u32, u64)> = active.iter().map(|&(_, index, write)| (index, write)).collect();
+        push_interleaved(&fresh, &mut order);
+        if order.len() < max {
+            order.extend(waiting.iter().map(|&(_, index, write)| (index, write)));
         }
         order.truncate(max);
         order
@@ -446,6 +508,19 @@ impl TextureQueue {
         if let Some(w) = self.same(index, write) {
             w.due = frame + (1u64 << w.looks.min(16)).min(most.max(1));
             w.looks = w.looks.saturating_add(1);
+            w.refused_until = 0;
+            w.full_waits = 0;
+        }
+    }
+
+    /// Slot `index` could not be allocated because the card is full: yield
+    /// to other due slots while `!room` for 2, 4, 8, ... frames up to `most`
+    /// without altering `due` or `looks`.
+    fn full(&mut self, index: u32, write: u64, frame: u64, most: u64) {
+        if let Some(w) = self.same(index, write) {
+            let wait = (2u64 << w.full_waits.min(7)).min(most.max(1));
+            w.refused_until = frame.saturating_add(wait);
+            w.full_waits = w.full_waits.saturating_add(1);
         }
     }
 
@@ -454,6 +529,7 @@ impl TextureQueue {
     fn partly(&mut self, index: u32, write: u64, due: u64, mapped: u64) {
         if let Some(w) = self.same(index, write) {
             (w.due, w.looks, w.mapped) = (due, 0, mapped.max(1));
+            (w.refused_until, w.full_waits) = (0, 0);
         }
     }
 
@@ -466,6 +542,7 @@ impl TextureQueue {
         if let Some(w) = self.same(index, write) {
             (w.due, w.looks, w.mapped) = (due, 1, 0);
             w.checked = (at.0, at.1, print, looks, uploaded);
+            (w.refused_until, w.full_waits) = (0, 0);
         }
     }
 
@@ -483,7 +560,19 @@ impl TextureQueue {
         self.writes += 1;
         let write = self.writes;
         let due = self.slots.get(&index).map_or(due, |w| w.due.min(due));
-        self.slots.insert(index, Waiting { due, written: frame, write, looks: 0, mapped: 0, checked: (0, 0, 0, 0, 0) });
+        self.slots.insert(
+            index,
+            Waiting {
+                due,
+                written: frame,
+                write,
+                looks: 0,
+                mapped: 0,
+                checked: (0, 0, 0, 0, 0),
+                refused_until: 0,
+                full_waits: 0,
+            },
+        );
     }
 
     /// Bytes of slot `index`'s memory that were mapped at its last upload
@@ -927,9 +1016,16 @@ impl HostHeap {
     /// with its write number, in the order to serve them
     /// ([`TextureQueue::due`]), and the queue's counts
     /// ([`TextureQueue::census`]).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn texture_slots_due(&self, frame: u64, max: usize) -> (Vec<(u32, u64)>, [u64; 5]) {
+        self.texture_slots_due_for(frame, max, true)
+    }
+
+    /// As [`HostHeap::texture_slots_due`], accounting for whether the card
+    /// currently has `room` for new textures ([`TextureQueue::due_for`]).
+    pub(crate) fn texture_slots_due_for(&self, frame: u64, max: usize, room: bool) -> (Vec<(u32, u64)>, [u64; 5]) {
         let textures = self.textures.lock().unwrap_or_else(|e| e.into_inner());
-        (if max == 0 { Vec::new() } else { textures.due(frame, max) }, textures.census(frame))
+        (if max == 0 { Vec::new() } else { textures.due_for(frame, max, room) }, textures.census(frame))
     }
 
     /// Every title slot of the queue that is due at `frame`, and whether
@@ -985,6 +1081,13 @@ impl HostHeap {
     pub(crate) fn texture_slot_later(&self, index: u32, write: u64, frame: u64, most: u64) {
         let mut textures = self.textures.lock().unwrap_or_else(|e| e.into_inner());
         textures.later(index, write, frame, most);
+    }
+
+    /// Slot `index` was refused while the card had no room for new textures
+    /// ([`TextureQueue::full`]).
+    pub(crate) fn texture_slot_full(&self, index: u32, write: u64, frame: u64, most: u64) {
+        let mut textures = self.textures.lock().unwrap_or_else(|e| e.into_inner());
+        textures.full(index, write, frame, most);
     }
 
     /// Bytes of title slot `index`'s memory that were mapped when it was
@@ -1058,9 +1161,16 @@ impl HostHeap {
     /// (any more): a host slot made from it becomes null again, so that
     /// the host copy can be let go (`crate::resource::let_go_idle`; a slot
     /// keeps what it views). True if the slot was made.
-    pub(crate) fn texture_slot_gone(&self, index: u32) -> bool {
+    pub(crate) fn texture_slot_gone(&self, index: u32, write: u64) -> bool {
         let mut made = self.made.lock().unwrap_or_else(|e| e.into_inner());
         if made.get(index as usize).is_none_or(|&key| key == 0) {
+            return false;
+        }
+        // Mapping was checked outside these locks. A newer descriptor may
+        // have been mirrored, or a table read may have removed the entry.
+        // Mirror takes the made lock before updating the texture queue.
+        let mut textures = self.textures.lock().unwrap_or_else(|e| e.into_inner());
+        if textures.same(index, write).is_none() {
             return false;
         }
         self.unmake(&mut made, index);
@@ -1601,6 +1711,27 @@ fn uav_desc(words: &[u32; 10]) -> D3D12_UNORDERED_ACCESS_VIEW_DESC {
     }
 }
 
+/// The format the host makes a typed buffer view in. Translated shaders
+/// declare every typed buffer load and store as 32-bit float
+/// (`victory_shader` `emit/lower.rs`), and a view in a 32-bit integer format
+/// converts between float and integer values on the way: a store of an
+/// integer's bits as a float is written as the integer the float rounds to
+/// (zero for most of them), where the console moves the bits. The float
+/// format of the same width moves them unchanged, and matches what the
+/// shader declares. (The meshlet culling programs append packed meshlet
+/// numbers to an `R32_UINT` list this way.)
+fn bit_exact_format(format: DXGI_FORMAT) -> DXGI_FORMAT {
+    match format {
+        DXGI_FORMAT_R32G32B32A32_UINT | DXGI_FORMAT_R32G32B32A32_SINT => {
+            DXGI_FORMAT_R32G32B32A32_FLOAT
+        }
+        DXGI_FORMAT_R32G32B32_UINT | DXGI_FORMAT_R32G32B32_SINT => DXGI_FORMAT_R32G32B32_FLOAT,
+        DXGI_FORMAT_R32G32_UINT | DXGI_FORMAT_R32G32_SINT => DXGI_FORMAT_R32G32_FLOAT,
+        DXGI_FORMAT_R32_UINT | DXGI_FORMAT_R32_SINT => DXGI_FORMAT_R32_FLOAT,
+        other => other,
+    }
+}
+
 /// A buffer view of title memory at `address` on its host copy: the first
 /// element moves by the copy's offset.
 /// Bytes per element of a buffer view.
@@ -1804,6 +1935,7 @@ fn buffer_srv(
             Flags: D3D12_BUFFER_SRV_FLAG_RAW,
         };
     }
+    desc.Format = bit_exact_format(desc.Format);
     let element = element_size(&desc);
     // SAFETY: a buffer view's union member.
     let buffer = unsafe { &mut desc.Anonymous.Buffer };
@@ -1895,6 +2027,7 @@ fn buffer_uav(
     buffer.CounterOffsetInBytes = 0;
     let (first, count, stride) = (buffer.FirstElement, buffer.NumElements, buffer.StructureByteStride);
     let raw = buffer.Flags.0 & D3D12_BUFFER_UAV_FLAG_RAW.0 != 0;
+    desc.Format = bit_exact_format(desc.Format);
     if window.is_some() {
         // (Left out at first: every structured unordered access view was then
         // refused by `buffer_view_ok` and left null, runs 15 and 16.)
@@ -2242,7 +2375,16 @@ fn keep_views() -> bool {
 fn same_placed_texture(a: &View, b: &View) -> bool {
     match (a, b) {
         (View::Placed(false, resource, desc), View::Placed(false, other, other_desc)) => {
-            resource[0] != 1 && resource == other && desc[10..12] == other_desc[10..12]
+            if resource[0] == 1 || desc[10..12] != other_desc[10..12] {
+                return false;
+            }
+            // Words 1 and 13 are struct padding carrying uninitialized title
+            // stack bytes; zero them to match `resource::texture_at` and
+            // `resource::placed_known`.
+            let mut a_key = *resource;
+            let mut b_key = *other;
+            (a_key[1], a_key[13], b_key[1], b_key[13]) = (0, 0, 0, 0);
+            a_key == b_key
         }
         _ => false,
     }
@@ -2435,6 +2577,35 @@ fn null_view(at: D3D12_CPU_DESCRIPTOR_HANDLE) {
 mod tests {
     use super::*;
 
+    /// Typed buffer views of 32-bit integer formats are made in the float
+    /// format of the same width (the shaders' float loads and stores then
+    /// move the bits); every other format is the title's.
+    #[test]
+    fn typed_buffer_views_of_32_bit_integers_move_bits() {
+        for (title, host) in [
+            (DXGI_FORMAT_R32_UINT, DXGI_FORMAT_R32_FLOAT),
+            (DXGI_FORMAT_R32_SINT, DXGI_FORMAT_R32_FLOAT),
+            (DXGI_FORMAT_R32G32_UINT, DXGI_FORMAT_R32G32_FLOAT),
+            (DXGI_FORMAT_R32G32B32_SINT, DXGI_FORMAT_R32G32B32_FLOAT),
+            (DXGI_FORMAT_R32G32B32A32_UINT, DXGI_FORMAT_R32G32B32A32_FLOAT),
+        ] {
+            assert_eq!(bit_exact_format(title), host);
+            assert_eq!(
+                crate::resource::element(title.0 as u32),
+                crate::resource::element(host.0 as u32)
+            );
+        }
+        for kept in [
+            DXGI_FORMAT_R32_FLOAT,
+            DXGI_FORMAT_R32_TYPELESS,
+            DXGI_FORMAT_UNKNOWN,
+            DXGI_FORMAT_R16G16_UINT,
+            DXGI_FORMAT_R8G8B8A8_UNORM,
+        ] {
+            assert_eq!(bit_exact_format(kept), kept);
+        }
+    }
+
     /// A null texture UAV keeps the title's dimension (3D for the world's
     /// wind field), and is 2D when the title names none.
     #[test]
@@ -2468,6 +2639,15 @@ mod tests {
         let low = view(texture, 3, 0x1000_0000);
         // more mips of the same texture
         assert!(same_placed_texture(&low, &view(texture, 0, 0x1000_0000)));
+        // differing uninitialized stack garbage in filler words [1] and [13]
+        let mut dirty_a = texture;
+        (dirty_a[1], dirty_a[13]) = (0x1111_2222, 0x3333_4444);
+        let mut dirty_b = texture;
+        (dirty_b[1], dirty_b[13]) = (0x5555_6666, 0x7777_8888);
+        assert!(same_placed_texture(
+            &view(dirty_a, 3, 0x1000_0000),
+            &view(dirty_b, 0, 0x1000_0000),
+        ));
         // another address, another description, a buffer, an unordered view
         assert!(!same_placed_texture(&low, &view(texture, 3, 0x2000_0000)));
         let mut wider = texture;
@@ -2570,6 +2750,101 @@ mod tests {
         q.written(98, 14, 16, false);
         assert!(!q.due(15, 100).iter().any(|d| d.0 == 98));
         assert!(q.due(16, 100).iter().any(|d| d.0 == 98));
+    }
+
+    /// When the card is full (`!room`), a prefix of >256 uncreated `again`
+    /// or `fresh` slots must not starve recheck slots, remapped (`changed`)
+    /// slots, or slots further down the queue; and the moment room returns,
+    /// previously refused slots become immediately eligible again.
+    #[test]
+    fn full_card_queue_does_not_starve_recheck_remapped_or_later_slots() {
+        let mut q = TextureQueue::default();
+        // 1 older recheck slot (already uploaded once on the card).
+        q.written(1, 1, 0, false);
+        let w1 = q.due(1, 10)[0].1;
+        q.recheck(1, w1, 2, (0x1000, 4096), 0xdead_beef, 0, 1);
+
+        // 300 uncreated slots that went through `later` (moving into `again`)
+        // with newer write numbers than the recheck slot.
+        for i in 100..400u32 {
+            q.written(i, 2, 0, false);
+            let w = q.slots[&i].write;
+            q.later(i, w, 2, 16); // due at frame 3
+        }
+        // 1 remapped slot (`changed` resets looks=0 -> fresh).
+        q.changed(50, 3, 3);
+        // 400 fresh slots with target slot 1200 in the middle.
+        for i in 1000..1400u32 {
+            q.written(i, 3, 0, false);
+        }
+
+        // Frame 3 with `!room`: recheck slot 1 and remapped slot 50 must be
+        // visited BEFORE the 256-refusal cap fires on uncreated slots.
+        let due_f3 = q.due_for(3, 4096, false);
+        let mut refused = 0usize;
+        let mut saw_recheck = false;
+        let mut saw_remapped = false;
+        let mut saw_middle = false;
+        for &(idx, write) in &due_f3 {
+            if idx == 1 {
+                saw_recheck = true;
+                q.done(idx, write);
+                continue;
+            }
+            if idx == 50 {
+                saw_remapped = true;
+                q.done(idx, write);
+                continue;
+            }
+            if idx == 1200 {
+                saw_middle = true;
+                q.done(idx, write);
+                continue;
+            }
+            q.full(idx, write, 3, 16);
+            refused += 1;
+            if refused > 256 {
+                break;
+            }
+        }
+        assert!(saw_recheck, "recheck slot must be served on frame 3 despite >256 uncreated slots");
+        assert!(saw_remapped, "remapped slot must be served on frame 3 despite >256 uncreated again slots");
+
+        // Subsequent frames with `!room` must advance past refused prefixes
+        // and reach the middle-of-fresh slot 1200 and trailing again slot 100.
+        let mut saw_trailing_again = false;
+        for frame in 4..12u64 {
+            let due = q.due_for(frame, 4096, false);
+            let mut refused = 0usize;
+            for &(idx, write) in &due {
+                if idx == 1200 {
+                    saw_middle = true;
+                    q.done(idx, write);
+                    continue;
+                }
+                if idx == 100 {
+                    saw_trailing_again = true;
+                    q.done(idx, write);
+                    continue;
+                }
+                q.full(idx, write, frame, 16);
+                refused += 1;
+                if refused > 256 {
+                    break;
+                }
+            }
+        }
+        assert!(saw_middle, "middle-of-fresh slot must be reached instead of livelocking on ends");
+        assert!(saw_trailing_again, "trailing again slot must be reached for streamed-out eviction");
+
+        // The moment `room` becomes true on frame 12, previously refused
+        // slots (whose `refused_until > 12`) are immediately due again.
+        let due_room = q.due_for(12, 4096, true);
+        assert!(
+            due_room.len() >= 600,
+            "room=true must immediately restore all refused slots (got {})",
+            due_room.len()
+        );
     }
 
     /// Textures of which only the smallest levels are held, packed into
@@ -2711,6 +2986,44 @@ mod tests {
         spans.forget(4);
         spans.forget(7);
         assert!(spans.by_start.is_empty() && spans.by_slot.is_empty());
+    }
+
+    #[test]
+    fn an_old_unmapped_observation_preserves_a_replacement_view() {
+        let Some(heap) = HostHeap::new(false, 8) else { return };
+        let slot = 1;
+        heap.queue_texture(slot, true, false, 10);
+        let (_, observed) = heap.texture_slots_due(10, 1).0[0];
+
+        // The replacement is a 64 x 64 BC7 texture with synthetic backing.
+        static BYTES: [u8; 65536] = [0; 65536];
+        let address = BYTES.as_ptr() as u64;
+        let resource = [3, 0, 0, 0, 64, 0, 64, 0x1_0001, 98, 1, 0, 0x105, 0, 0];
+        let mut srv = [0; 16];
+        srv[..6].copy_from_slice(&[98, 4, 5768, 0, 0, 1]);
+        (srv[10], srv[11]) = (address as u32, (address >> 32) as u32);
+        let view = View::Placed(false, resource, srv);
+        let [entry, generation] = super::super::words_for(view.clone());
+        let title = [super::super::VIEW_TAG, entry, generation];
+        let handle = title.as_ptr() as u64;
+        assert_eq!(heap.mirror(slot, handle, false), Some(view.clone()));
+        let (_, replacement) = heap.texture_slots_due(u64::MAX, 1).0[0];
+        assert_ne!(observed, replacement);
+        assert_eq!(heap.mirror(slot, handle, true), Some(view));
+        assert_eq!(super::device_removed(), None);
+        let key = u64::from(generation) << 32 | u64::from(entry);
+        assert!(heap.kept.lock().unwrap()[slot as usize].is_some());
+        assert!(!heap.texture_slot_gone(slot, observed));
+        assert_eq!(heap.made.lock().unwrap()[slot as usize], key);
+        assert_eq!(heap.texture_slots_due(u64::MAX, 1).0, [(slot, replacement)]);
+        // A completed write is no longer queued for refresh.
+        heap.texture_slot_done(slot, replacement, None);
+        assert!(!heap.texture_slot_gone(slot, replacement));
+        assert_eq!(heap.made.lock().unwrap()[slot as usize], key);
+        heap.queue_texture(slot, true, false, 12);
+        let (_, current) = heap.texture_slots_due(u64::MAX, 1).0[0];
+        assert!(heap.texture_slot_gone(slot, current));
+        assert_eq!(heap.made.lock().unwrap()[slot as usize], 0);
     }
 
     /// Memory the runtime maps under a slot's texture makes the slot due
