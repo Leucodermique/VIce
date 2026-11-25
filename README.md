@@ -1,3 +1,32 @@
+<p align="center">
+  <img src="launcher/studio/studio-emblem.png" alt="VIce Studio" width="180" />
+</p>
+
+<h1 align="center">VIce · VIce Studio</h1>
+
+<p align="center">
+  <strong>Couche de compatibilité Xbox Series X|S → Windows 11 (Rust / Direct3D 12) + Launcher VIce Studio</strong>
+</p>
+
+---
+
+## À propos de VIce
+
+**VIce** est une distribution consolidée et un launcher (**VIce Studio**) bâtis au-dessus de l’écosystème open-source **VIctory** pour exécuter des titres Xbox Series X|S nativement sur Windows 11 (avec un focus particulier sur les GPU **NVIDIA RTX 8 Go VRAM**).
+
+- **Géré et maintenu par [Antigravity](https://antigravity.google) (Google DeepMind / Gemini)** : l’intégration technique, la résolution des conflits, le débogage shader/D3D12, la validation par tests unitaires & builds `--release`, ainsi que le développement du launcher **VIce Studio** sont pilotés par le modèle.
+- **Alimenté automatiquement à partir des avancées communautaires** : ce dépôt suit et fusionne régulièrement les meilleurs commits, PRs et correctifs issus des dépôts amont et forks actifs :
+  - **[Marvisak/VIctory](https://github.com/Marvisak/VIctory)** — socle principal (loader, services HLE, backend Direct3D 12, recompilateur shaders, licence **GPL-3.0-or-later**).
+  - **[fxceless/victory-fork](https://github.com/fxceless/victory-fork)** — optimisations NVIDIA RTX, Depth Bounds Test (`#82`), textures pré-chargées avant le *character bake*, déduplication VRAM, AVX2 relay merge, correctifs peau/murs (`#191`, `#206`, `#381`, `#384`, `#386`, `#387`, `#391`, `#393`).
+  - **[LooperSalty/victory](https://github.com/LooperSalty/victory)** — file D3D12 `COPY` dédiée, notification DirectStorage → GPU (`VICTORY_DSTORAGE_NOTIFY=1`, fix murs), correctifs BCPack BC7, MIMG, *in-place* sous `late waits`, et oracle `xg_xs.dll`.
+- **Ajouts propres à VIce** :
+  - **VIce Studio v4** (`launcher/studio/`) : launcher web local minimaliste à l’identité néon/coucher de soleil, animation d’ouverture, bouton unifié **Jouer / Arrêter** synchronisé en temps réel sur la fenêtre Win32 du jeu, télémétrie live en RAM (FPS, ms/frame, draws), mode développeur protégé par mot de passe et journaux filtrés côté serveur.
+  - Correctifs shaders NVIDIA locaux (`LOOP_LIMIT = 16384` anti-TDR, déblocage `PS_PuddleDetect` & `ShallowWaterSim`).
+
+> **Avertissement légal :** ce dépôt ne contient **aucun fichier, binaire, code ou asset de jeu**. Vous devez fournir vos propres fichiers légitimes au lancement. Ce projet est publié sous licence **GPL-3.0-or-later** dans le respect total de [VIctory](https://github.com/Marvisak/VIctory).
+
+---
+
 # VIctory fork (work in progress)
 
 A work-in-progress fork of [VIctory](https://github.com/Marvisak/VIctory), a
