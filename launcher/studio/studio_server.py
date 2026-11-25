@@ -565,18 +565,18 @@ def launch_game(cfg, developer):
     bvh_builder = bool(cfg.get("bvhBuilder", False))
 
     if fast_gpu:
-        # RTX 4070 Laptop 8 GB / 16 GB RAM high-FPS + sharp textures & full indirect lighting profile:
-        # - Series X + VICTORY_RESOLUTION=1920x1080 keeps full Series X indirect lighting while saving ~2.3 GB VRAM
-        # - VICTORY_TEXTURE_DROP_MIPS=1 (4x sharper than DROP_MIPS=2, without LEVELS_ON_DEMAND) keeps scenery & NPCs crisp
-        # - ASYNC_SUBMIT=1 + QUEUE2=1 + SKIP_WC_COMPARE=1 eliminates GPU idle gaps while copy-back stays ~8 MB
-        # - CARD_BUFFERS_MB=1280 + CARD_BUFFERS_MIN_KB=256 offloads the 44-76 MB/frame buffer checks from CPU to GPU
-        # - INDIRECT_GATHER=1 + INDIRECT_WINDOW_DRAWS=1 + CLAMP_WAITS=0 + ALIAS_ONCE=1 + GUARD_HOLES_FRAME=1 + HEAP_WORKER=1
+        # RTX 4070 Laptop 8 GB / 16 GB RAM optimal balance (verified by play.log):
+        # - Series X + VICTORY_RESOLUTION=1920x1080 + DROP_MIPS=2 stays ~5.3/8 GB VRAM (DROP_MIPS=1 hit VRAM cap "no room for new ones")
+        # - ASYNC_SUBMIT=1 + QUEUE2=1 + SKIP_WC_COMPARE=1 cut copy-back from 26 ms -> 5.8 ms (2.8 MB)
+        # - CARD_BUFFERS_MB=768 + CARD_BUFFERS_MIN_KB=256 cut CPU buffer scans from 76 MB -> 7.1 MB without starving texture VRAM
+        # - HEAP_WORKER=0 (main-thread texture pass is only 2.3 ms with DROP_MIPS=2 vs 145 ms worker contention)
+        # - INDIRECT_GATHER=1 + INDIRECT_WINDOW_DRAWS=1 + CLAMP_WAITS=0 + ALIAS_ONCE=1 + GUARD_HOLES_FRAME=1 + WIDE_TEXTURES=1
         env.pop("VICTORY_LEVELS_ON_DEMAND", None)
         if console == "series-x":
             env["VICTORY_RESOLUTION"] = "1920x1080"
         else:
             env.pop("VICTORY_RESOLUTION", None)
-        env["VICTORY_TEXTURE_DROP_MIPS"] = "1"
+        env["VICTORY_TEXTURE_DROP_MIPS"] = "2"
         env.pop("VICTORY_RELAY", None)
         env["VICTORY_ASYNC_SUBMIT"] = "1"
         env["VICTORY_QUEUE2"] = "1"
@@ -590,17 +590,17 @@ def launch_game(cfg, developer):
         env["VICTORY_SKIP_WC_COMPARE"] = "1"
         env["VICTORY_WIDE_TEXTURES"] = "1"
         env["VICTORY_GUARD_HOLES_FRAME"] = "1"
-        env["VICTORY_HEAP_WORKER"] = "1"
+        env["VICTORY_HEAP_WORKER"] = "0"
         env["VICTORY_XMEM_PERSISTENT_VIEW"] = "1"
         env["VICTORY_TEXTURE_NO_WAIT"] = "1"
         env["VICTORY_TEXTURE_CATCHUP"] = "0"
-        env["VICTORY_TEXTURE_STAGE_MS"] = "48"
+        env["VICTORY_TEXTURE_STAGE_MS"] = "36"
         env["VICTORY_WIDE_BACK"] = "1"
         env["VICTORY_CARD_REHASH_RUNS"] = "1"
         env["VICTORY_LATE_WAIT_LISTS"] = "512"
         env["VICTORY_CARD_BUFFERS_MIN_MB"] = "1"
         env["VICTORY_CARD_BUFFERS_MIN_KB"] = "256"
-        env["VICTORY_CARD_BUFFERS_MB"] = "1280"
+        env["VICTORY_CARD_BUFFERS_MB"] = "768"
         env["VICTORY_CARD_WINDOWS_MB"] = "384"
         env["VICTORY_WINDOW_KB"] = "1024"
         env["VICTORY_WINDOW_TAILS"] = "1"
