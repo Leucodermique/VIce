@@ -7,25 +7,27 @@
 <style>
 :root{
   color-scheme:dark;
-  --bg:#0c0c10;
-  --panel:#13131a;
-  --panel-2:#1a1a24;
-  --line:#262634;
-  --line-hover:#3c3c52;
-  --text:#f0f0f5;
-  --muted:#8d8da1;
-  --accent:#a97bff;
-  --accent-2:#d95be2;
-  --green:#5ee2a0;
-  --red:#ff7383;
-  --amber:#f2bf6d;
-  --radius:14px;
+  --bg:#16101d;
+  --glass:rgba(28,20,38,.78);
+  --glass-strong:rgba(24,18,34,.90);
+  --line:rgba(255,255,255,.14);
+  --line-hover:rgba(230,181,255,.36);
+  --text:#f5f2f8;
+  --muted:#b4a7c2;
+  --accent:#c88fff;
+  --pink:#e052c8;
+  --violet:#7c4dff;
+  --green:#78e6b1;
+  --red:#ff8492;
+  --amber:#f5c273;
+  --radius:16px;
 }
 *{box-sizing:border-box}
-html,body{height:100%;margin:0}
+html,body{min-height:100%;margin:0}
 body{
   background:
-    radial-gradient(900px 420px at 50% -120px,rgba(169,123,255,.16),transparent 65%),
+    linear-gradient(180deg,rgba(20,13,29,.22) 0%,rgba(20,14,30,.52) 55%,rgba(16,11,24,.90) 100%),
+    url('/art/sunset.svg') center center / cover fixed no-repeat,
     var(--bg);
   color:var(--text);
   font:13.5px/1.5 "Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;
@@ -33,14 +35,15 @@ body{
   display:flex;
   flex-direction:column;
 }
+body:not(.developer) .dev-only{display:none!important}
 
-/* Header */
+/* Barre supérieure ultra-épurée */
 header{
-  height:56px;
-  padding:0 24px;
-  border-bottom:1px solid var(--line);
-  background:rgba(12,12,16,.82);
-  backdrop-filter:blur(12px);
+  height:58px;
+  padding:0 26px;
+  background:rgba(19,13,28,.62);
+  backdrop-filter:blur(18px);
+  border-bottom:1px solid rgba(255,255,255,.10);
   display:flex;
   align-items:center;
   justify-content:space-between;
@@ -49,9 +52,11 @@ header{
   top:0;
   z-index:10;
 }
-.brand{display:flex;align-items:center;gap:12px}
-.brand img{height:24px;width:auto;display:block}
-.tabs{display:flex;gap:4px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:3px}
+.head-left{display:flex;align-items:center;gap:18px}
+.brand-mini{display:flex;align-items:center;gap:8px;cursor:pointer}
+.brand-mini img{height:24px;width:auto;display:block;filter:drop-shadow(0 2px 8px rgba(0,0,0,.45))}
+.brand-mini span{font-size:10px;letter-spacing:.22em;color:var(--muted);font-weight:650;padding-top:2px}
+nav{display:flex;gap:4px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.10);border-radius:11px;padding:3px}
 .tab{
   border:0;
   background:transparent;
@@ -60,332 +65,382 @@ header{
   font-size:12.5px;
   font-weight:550;
   padding:6px 14px;
-  border-radius:7px;
+  border-radius:8px;
   cursor:pointer;
   transition:background .15s,color .15s;
 }
-.tab:hover{color:var(--text)}
-.tab.active{background:var(--panel-2);color:var(--text)}
+.tab:hover{color:#fff}
+.tab.active{
+  background:linear-gradient(105deg,rgba(124,77,255,.85),rgba(204,70,196,.85));
+  color:#fff;
+  box-shadow:0 3px 12px rgba(164,68,216,.32);
+}
 .status-pill{
   display:inline-flex;
   align-items:center;
   gap:7px;
   font-size:12px;
-  color:var(--muted);
-  background:var(--panel);
-  border:1px solid var(--line);
-  padding:5px 11px;
+  color:#e2d7ec;
+  background:rgba(20,14,29,.65);
+  border:1px solid rgba(255,255,255,.14);
+  padding:5px 12px;
   border-radius:999px;
   white-space:nowrap;
 }
 .dot{width:7px;height:7px;border-radius:50%;background:var(--green);flex:none}
 .dot.warn{background:var(--amber)}
 .dot.off{background:var(--red)}
-.dot.live{background:var(--green);box-shadow:0 0 8px var(--green)}
+.dot.live{background:var(--green);box-shadow:0 0 9px var(--green)}
 
-/* Main container */
+/* Conteneur principal */
 main{
   flex:1;
   width:100%;
-  max-width:760px;
+  max-width:720px;
   margin:0 auto;
-  padding:28px 20px 36px;
+  padding:22px 22px 40px;
+  display:flex;
+  flex-direction:column;
 }
-main.wide{max-width:1080px}
+main.wide{max-width:1060px}
 .view{display:none}
-.view.active{display:block;animation:fade .18s ease-out}
-@keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+.view.active{display:block;animation:fade .22s ease-out}
+@keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 
-/* Cards & controls */
+/* Hero VIce sur fond GTA 6 */
+.hero-logo-wrap{
+  text-align:center;
+  padding:22px 0 24px;
+}
+.hero-logo{
+  width:clamp(250px,36vw,390px);
+  max-width:82%;
+  height:auto;
+  display:block;
+  margin:0 auto;
+  filter:drop-shadow(0 14px 28px rgba(24,8,38,.78));
+}
+.hero-sub{
+  margin-top:8px;
+  font-size:10px;
+  letter-spacing:.26em;
+  text-transform:uppercase;
+  color:rgba(250,226,242,.72);
+  font-weight:600;
+}
+
+/* Cartes glassmorphism épurées */
 .card{
-  background:var(--panel);
+  background:var(--glass);
+  backdrop-filter:blur(20px);
   border:1px solid var(--line);
   border-radius:var(--radius);
-  padding:20px 22px;
+  padding:22px 24px;
+  box-shadow:0 16px 40px rgba(12,6,22,.42);
 }
+.card.solid{background:var(--glass-strong)}
 .stack{display:flex;flex-direction:column;gap:14px}
 
-.hero{
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  gap:20px;
-  padding:22px 24px;
-  background:linear-gradient(135deg,rgba(169,123,255,.10),rgba(217,91,226,.06) 55%,var(--panel));
-  border:1px solid #322c46;
-  border-radius:var(--radius);
-}
-.hero-info h1{margin:0;font-size:21px;font-weight:650;letter-spacing:-.4px}
-.hero-meta{margin-top:5px;color:var(--muted);font-size:12px;display:flex;flex-wrap:wrap;gap:6px 14px}
-.hero-actions{display:flex;gap:8px;flex:none}
-
+/* Boutons */
 button{
   font:inherit;
   cursor:pointer;
-  border-radius:10px;
+  border-radius:11px;
   border:1px solid var(--line);
-  background:var(--panel-2);
+  background:rgba(255,255,255,.08);
   color:var(--text);
-  padding:9px 15px;
+  padding:9px 16px;
   font-weight:550;
   display:inline-flex;
   align-items:center;
   justify-content:center;
   gap:8px;
-  transition:background .15s,border-color .15s,transform .12s,opacity .15s;
+  transition:background .15s,border-color .15s,transform .12s,box-shadow .18s,opacity .15s;
 }
-button:hover:not(:disabled){background:#232331;border-color:var(--line-hover)}
+button:hover:not(:disabled){background:rgba(255,255,255,.14);border-color:var(--line-hover)}
 button:active:not(:disabled){transform:scale(.98)}
 button:disabled{opacity:.5;cursor:not-allowed}
 button.primary{
-  background:linear-gradient(105deg,var(--accent),var(--accent-2));
-  border-color:transparent;
+  background:linear-gradient(100deg,var(--violet),var(--pink));
+  border:1px solid rgba(255,204,255,.38);
   color:#fff;
-  padding:11px 22px;
-  font-size:14px;
-  box-shadow:0 6px 20px rgba(169,123,255,.28);
+  font-size:15.5px;
+  font-weight:620;
+  min-height:50px;
+  padding:12px 24px;
+  box-shadow:0 8px 26px rgba(186,66,224,.40);
 }
-button.primary:hover:not(:disabled){filter:brightness(1.08)}
+button.primary:hover:not(:disabled){
+  filter:brightness(1.08);
+  box-shadow:0 10px 30px rgba(210,74,238,.55);
+  transform:translateY(-1px);
+}
 button.danger{
-  background:rgba(255,115,131,.14);
-  border-color:rgba(255,115,131,.4);
-  color:var(--red);
-  padding:11px 20px;
-  font-size:14px;
+  background:rgba(255,108,128,.18);
+  border-color:rgba(255,132,146,.48);
+  color:#ffd5da;
+  font-size:15px;
+  font-weight:600;
+  min-height:50px;
+  padding:12px 22px;
 }
-button.danger:hover:not(:disabled){background:rgba(255,115,131,.22)}
-button.ghost{background:transparent;border-color:var(--line);padding:7px 12px;font-size:12px}
+button.danger:hover:not(:disabled){background:rgba(255,108,128,.28)}
+button.ghost{padding:7px 12px;font-size:12px;background:rgba(255,255,255,.05)}
 
-/* Telemetry strip */
-.stats{
-  display:grid;
-  grid-template-columns:repeat(4,minmax(0,1fr));
-  gap:10px;
-}
-.stat{
-  background:var(--panel);
-  border:1px solid var(--line);
-  border-radius:12px;
-  padding:13px 15px;
-}
-.stat span{display:block;font-size:11px;color:var(--muted)}
-.stat strong{display:block;margin-top:4px;font-size:19px;font-weight:650;font-variant-numeric:tabular-nums;letter-spacing:-.4px}
-.green{color:var(--green)}
-.red{color:var(--red)}
-.amber{color:var(--amber)}
+/* Bloc principal Jouer */
+.play-cta{display:flex;gap:10px;margin-bottom:18px}
+.play-cta .primary,.play-cta .danger{flex:1}
 
-/* Settings rows */
 .row{
   display:flex;
   align-items:center;
   justify-content:space-between;
   gap:16px;
   padding:12px 0;
-  border-bottom:1px solid var(--line);
+  border-bottom:1px solid rgba(255,255,255,.09);
 }
-.row:first-child{padding-top:0}
+.row:first-of-type{padding-top:2px}
 .row:last-child{padding-bottom:0;border-bottom:0}
 .row-label strong{display:block;font-size:13.5px;font-weight:550}
 .row-label small{display:block;font-size:11.5px;color:var(--muted);margin-top:2px}
 
-select,input[type="text"]{
+select,input[type="text"],input[type="password"]{
   font:inherit;
   font-size:13px;
   color:var(--text);
-  background:var(--panel-2);
-  border:1px solid var(--line);
-  border-radius:9px;
-  padding:7px 11px;
+  background:rgba(16,11,25,.72);
+  border:1px solid rgba(255,255,255,.18);
+  border-radius:10px;
+  padding:8px 12px;
   outline:none;
 }
-select:focus,input[type="text"]:focus{border-color:var(--accent)}
+select option{background:#1b1326;color:#f5f2f8}
+select:focus,input:focus{border-color:var(--accent)}
 
 .switch{position:relative;width:38px;height:22px;flex:none;display:inline-block}
 .switch input{opacity:0;width:0;height:0;position:absolute}
 .slider{
   position:absolute;inset:0;border-radius:999px;
-  background:#2a2a38;border:1px solid #3c3c4f;
+  background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.20);
   cursor:pointer;transition:background .18s,border-color .18s;
 }
 .slider:after{
   content:"";position:absolute;left:3px;top:3px;
   width:14px;height:14px;border-radius:50%;
-  background:#c9c9d6;transition:transform .18s,background .18s;
+  background:#dfd5eb;transition:transform .18s,background .18s;
 }
-.switch input:checked+.slider{background:var(--accent);border-color:var(--accent)}
+.switch input:checked+.slider{background:#a862f2;border-color:#d8b0ff}
 .switch input:checked+.slider:after{transform:translateX(16px);background:#fff}
 
-/* Collapsible advanced */
-details.adv{
-  background:var(--panel);
-  border:1px solid var(--line);
-  border-radius:var(--radius);
-  padding:14px 22px;
-}
-details.adv summary{
-  cursor:pointer;
-  list-style:none;
+.play-foot{
+  margin-top:16px;
+  padding-top:14px;
+  border-top:1px solid rgba(255,255,255,.09);
   display:flex;
   align-items:center;
   justify-content:space-between;
+  gap:12px;
+  flex-wrap:wrap;
+  font-size:12px;
   color:var(--muted);
-  font-size:12.5px;
-  font-weight:550;
-  user-select:none;
 }
-details.adv summary::-webkit-details-marker{display:none}
-details.adv[open] summary{color:var(--text);margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--line)}
-.adv-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px}
-.adv-chip{
-  display:flex;align-items:center;justify-content:space-between;gap:10px;
-  padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2);
-}
-.adv-chip span{font-size:12px;font-weight:550}
-
-/* Message bar */
-.msg{
-  font-size:12.5px;
-  color:var(--muted);
-  min-height:20px;
-  padding:0 4px;
-}
+.msg{min-height:18px}
 .msg.err{color:var(--red)}
 .msg.ok{color:var(--green)}
+.green{color:var(--green)}
+.red{color:var(--red)}
+.amber{color:var(--amber)}
 
-/* Logs view */
+.dev-chips{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:14px}
+.chip{
+  display:flex;align-items:center;justify-content:space-between;gap:8px;
+  padding:9px 11px;border:1px solid rgba(255,255,255,.11);border-radius:10px;
+  background:rgba(255,255,255,.04);font-size:12px;font-weight:550;
+}
+
+/* Diagnostics (Mode dev) */
+.page-head{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;margin-bottom:16px}
+.page-head h1{margin:0;font-size:24px;font-weight:650;letter-spacing:-.6px}
+.page-head p{margin:4px 0 0;color:var(--muted);font-size:12.5px}
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:14px}
+.stat{
+  background:var(--glass-strong);
+  backdrop-filter:blur(16px);
+  border:1px solid var(--line);
+  border-radius:13px;
+  padding:15px 17px;
+}
+.stat span{display:block;font-size:11px;color:var(--muted)}
+.stat strong{display:block;margin-top:5px;font-size:22px;font-weight:650;font-variant-numeric:tabular-nums}
+.two{display:grid;grid-template-columns:1.2fr 1fr;gap:14px}
+.card h2{margin:0 0 12px;font-size:15px;font-weight:600}
+.bar-wrap{margin-bottom:10px}
+.bar-wrap:last-child{margin-bottom:0}
+.bar-lbl{display:flex;justify-content:space-between;font-size:11.5px;color:#d6cbe2;margin-bottom:4px}
+.track{height:5px;background:rgba(255,255,255,.10);border-radius:99px;overflow:hidden}
+.fill{height:100%;background:linear-gradient(90deg,var(--violet),var(--pink));border-radius:99px}
+
+/* Journaux (Mode dev) */
 .toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
-.toolbar input[type="text"]{flex:1;min-width:180px}
+.toolbar input[type="text"]{flex:1;min-width:190px}
 .log-box{
-  background:#0a0a0e;
+  background:rgba(12,8,18,.90);
+  backdrop-filter:blur(16px);
   border:1px solid var(--line);
   border-radius:var(--radius);
   overflow:hidden;
 }
 .log-head{
   padding:10px 14px;
-  border-bottom:1px solid var(--line);
-  display:flex;
-  justify-content:space-between;
-  align-items:center;
-  font-size:12px;
-  color:var(--muted);
+  border-bottom:1px solid rgba(255,255,255,.10);
+  display:flex;justify-content:space-between;align-items:center;
+  font-size:12px;color:var(--muted);
 }
 .log-scroll{
-  height:calc(100vh - 240px);
+  height:calc(100vh - 250px);
   min-height:320px;
   overflow:auto;
   font:11.5px/1.55 Consolas,"Cascadia Mono",monospace;
 }
 .log-line{
-  display:grid;
-  grid-template-columns:48px 54px minmax(0,1fr);
-  gap:10px;
-  padding:3px 14px;
-  border-bottom:1px solid rgba(255,255,255,.03);
+  display:grid;grid-template-columns:46px 52px minmax(0,1fr);gap:10px;
+  padding:3px 14px;border-bottom:1px solid rgba(255,255,255,.03);
 }
-.log-line:hover{background:rgba(255,255,255,.03)}
-.log-n{color:#555568;text-align:right;user-select:none}
+.log-line:hover{background:rgba(255,255,255,.04)}
+.log-n{color:#655876;text-align:right;user-select:none}
 .log-lvl{font-weight:650;font-size:10.5px;text-transform:uppercase}
 .log-lvl.error{color:var(--red)}
 .log-lvl.warn{color:var(--amber)}
 .log-lvl.perf{color:var(--green)}
-.log-lvl.info{color:#8fa6ff}
-.log-lvl.other{color:#66667a}
-.log-txt{white-space:pre-wrap;overflow-wrap:anywhere;color:#d6d6e2}
-.empty{padding:40px;text-align:center;color:var(--muted)}
+.log-lvl.info{color:#a8b8ff}
+.log-lvl.other{color:#7c6f8c}
+.log-txt{white-space:pre-wrap;overflow-wrap:anywhere;color:#e5def0}
+.empty{padding:36px;text-align:center;color:var(--muted)}
 
-@media(max-width:680px){
-  .hero{flex-direction:column;align-items:flex-start}
+/* Paramètres (Mode développeur avec mot de passe) */
+.dev-form{margin-top:16px;padding-top:16px;border-top:1px solid rgba(255,255,255,.10)}
+.dev-form[hidden]{display:none}
+.dev-form-row{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
+.dev-form-row input{flex:1;min-width:180px}
+
+@media(max-width:720px){
+  header{padding:0 14px}
+  .brand-mini span{display:none}
   .stats{grid-template-columns:repeat(2,minmax(0,1fr))}
-  .adv-grid{grid-template-columns:1fr}
+  .two,.dev-chips{grid-template-columns:1fr}
 }
 </style>
 </head>
 <body>
 <header>
-  <div class="brand">
-    <img src="/art/vice-logo.svg" alt="VIce">
-    <div class="tabs" role="tablist">
-      <button class="tab active" data-view="play" role="tab">Jouer</button>
-      <button class="tab" data-view="logs" role="tab">Journaux</button>
+  <div class="head-left">
+    <div class="brand-mini" id="brand-home">
+      <img src="/art/vice-logo.svg" alt="VIce">
+      <span>STUDIO</span>
     </div>
+    <nav role="tablist">
+      <button class="tab active" data-view="play" role="tab">Jouer</button>
+      <button class="tab dev-only" data-view="diag" role="tab">Diagnostics</button>
+      <button class="tab dev-only" data-view="logs" role="tab">Journaux</button>
+      <button class="tab" data-view="settings" role="tab">Paramètres</button>
+    </nav>
   </div>
-  <div class="status-pill" id="conn-pill"><i class="dot" id="conn-dot"></i><span id="conn-text">Prêt</span></div>
+  <div class="status-pill"><i class="dot" id="conn-dot"></i><span id="conn-text">Prêt</span></div>
 </header>
 
 <main id="main">
   <!-- JOUER -->
   <section id="view-play" class="view active">
-    <div class="stack">
-      <div class="hero">
-        <div class="hero-info">
-          <h1>GTA VI · VIce</h1>
-          <div class="hero-meta">
-            <span id="meta-build">Build —</span>
-            <span id="meta-title">Jeu —</span>
-          </div>
-        </div>
-        <div class="hero-actions">
-          <button class="primary" id="btn-launch">▶ Lancer le jeu</button>
-          <button class="danger" id="btn-stop" hidden>■ Arrêter</button>
-        </div>
+    <div class="hero-logo-wrap">
+      <img class="hero-logo" src="/art/vice-logo.svg" alt="VIce">
+      <div class="hero-sub">VIce Studio · Compatibility Engine</div>
+    </div>
+
+    <div class="card">
+      <div class="play-cta">
+        <button class="primary" id="btn-launch">▶ Lancer le jeu</button>
+        <button class="danger" id="btn-stop" hidden>■ Arrêter le jeu</button>
       </div>
 
-      <div class="stats">
-        <div class="stat"><span>FPS</span><strong id="st-fps">—</strong></div>
-        <div class="stat"><span>Frame</span><strong id="st-ms">—</strong></div>
-        <div class="stat"><span>Draws / frame</span><strong id="st-draws">—</strong></div>
-        <div class="stat"><span>Session</span><strong id="st-exit">—</strong></div>
+      <div class="row">
+        <div class="row-label">
+          <strong>Console cible</strong>
+          <small>Profil de compatibilité (Xbox Series X recommandé)</small>
+        </div>
+        <select id="opt-console">
+          <option value="series-x">Xbox Series X</option>
+          <option value="series-s">Xbox Series S</option>
+        </select>
       </div>
 
-      <div class="card">
-        <div class="row">
-          <div class="row-label">
-            <strong>Console cible</strong>
-            <small>Xbox Series X recommandé pour ce build</small>
-          </div>
-          <select id="opt-console">
-            <option value="series-x">Xbox Series X</option>
-            <option value="series-s">Xbox Series S</option>
-          </select>
+      <!-- Options développeur uniquement -->
+      <div class="row dev-only">
+        <div class="row-label">
+          <strong>Version du moteur</strong>
+          <small id="meta-build-detail">Exécutable local</small>
         </div>
-        <div class="row">
-          <div class="row-label">
-            <strong>Accélération GPU RTX</strong>
-            <small>Relais async, file COPY, buffers 1–768 Mo</small>
-          </div>
-          <label class="switch"><input id="opt-fast" type="checkbox" checked><span class="slider"></span></label>
-        </div>
-        <div class="row">
-          <div class="row-label">
-            <strong>Fix murs DirectStorage</strong>
-            <small>Notifie le GPU après le streaming des décors</small>
-          </div>
-          <label class="switch"><input id="opt-dstorage" type="checkbox" checked><span class="slider"></span></label>
-        </div>
+        <select id="opt-version"><option value="victory.exe">victory.exe</option></select>
       </div>
 
-      <details class="adv">
-        <summary>Options avancées <span>▾</span></summary>
-        <div class="row" style="padding-top:0">
-          <div class="row-label">
-            <strong>Version du moteur</strong>
-            <small id="meta-build-detail">Exécutable local</small>
-          </div>
-          <select id="opt-version"><option value="victory.exe">victory.exe</option></select>
+      <div class="row dev-only">
+        <div class="row-label">
+          <strong>Accélération GPU RTX</strong>
+          <small>Relais async, file COPY, buffers 1–768 Mo</small>
         </div>
-        <div class="adv-grid">
-          <div class="adv-chip"><span>Debug D3D12</span><label class="switch"><input id="opt-debug" type="checkbox"><span class="slider"></span></label></div>
-          <div class="adv-chip"><span>Stats surface</span><label class="switch"><input id="opt-surface" type="checkbox"><span class="slider"></span></label></div>
-          <div class="adv-chip"><span>WARP logiciel</span><label class="switch"><input id="opt-warp" type="checkbox"><span class="slider"></span></label></div>
-        </div>
-      </details>
+        <label class="switch"><input id="opt-fast" type="checkbox" checked><span class="slider"></span></label>
+      </div>
 
-      <div class="msg" id="msg" role="status"></div>
+      <div class="row dev-only">
+        <div class="row-label">
+          <strong>Fix murs DirectStorage</strong>
+          <small>Notifie le GPU après le streaming des décors</small>
+        </div>
+        <label class="switch"><input id="opt-dstorage" type="checkbox" checked><span class="slider"></span></label>
+      </div>
+
+      <div class="dev-chips dev-only">
+        <div class="chip"><span>Debug D3D12</span><label class="switch"><input id="opt-debug" type="checkbox"><span class="slider"></span></label></div>
+        <div class="chip"><span>Stats surface</span><label class="switch"><input id="opt-surface" type="checkbox"><span class="slider"></span></label></div>
+        <div class="chip"><span>WARP logiciel</span><label class="switch"><input id="opt-warp" type="checkbox"><span class="slider"></span></label></div>
+      </div>
+
+      <div class="play-foot">
+        <span class="msg" id="msg" role="status">Prêt à lancer.</span>
+        <span id="play-summary">Dernière session : —</span>
+      </div>
     </div>
   </section>
 
-  <!-- JOURNAUX -->
+  <!-- DIAGNOSTICS (Mode dev) -->
+  <section id="view-diag" class="view">
+    <div class="page-head">
+      <div>
+        <h1>Diagnostics</h1>
+        <p id="diag-build">Build local —</p>
+      </div>
+      <button class="ghost" id="btn-go-logs">Ouvrir les journaux →</button>
+    </div>
+
+    <div class="stats">
+      <div class="stat"><span>FPS</span><strong id="st-fps">—</strong></div>
+      <div class="stat"><span>Temps / frame</span><strong id="st-ms">—</strong></div>
+      <div class="stat"><span>Draws / frame</span><strong id="st-draws">—</strong></div>
+      <div class="stat"><span>État sortie</span><strong id="st-exit">—</strong></div>
+    </div>
+
+    <div class="two">
+      <div class="card solid">
+        <h2>Compteurs GPU (vs session précédente)</h2>
+        <div id="diag-rows"></div>
+      </div>
+      <div class="card solid">
+        <h2>Messages Direct3D (top IDs)</h2>
+        <div id="diag-codes"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- JOURNAUX (Mode dev) -->
   <section id="view-logs" class="view">
     <div class="toolbar">
       <input type="text" id="log-q" placeholder="Filtrer (fps, erreur, shader, pipeline…)" autocomplete="off">
@@ -408,12 +463,41 @@ details.adv[open] summary{color:var(--text);margin-bottom:14px;padding-bottom:12
       <div class="log-scroll" id="log-list"><div class="empty">Chargement…</div></div>
     </div>
   </section>
+
+  <!-- PARAMÈTRES -->
+  <section id="view-settings" class="view">
+    <div class="page-head">
+      <div>
+        <h1>Paramètres</h1>
+        <p>Accès avancés de VIce Studio.</p>
+      </div>
+    </div>
+    <div class="card solid">
+      <div class="row">
+        <div class="row-label">
+          <strong>Mode développeur</strong>
+          <small id="dev-status">Désactivé — protégé par mot de passe</small>
+        </div>
+        <button id="btn-dev-toggle">Activer</button>
+      </div>
+      <form id="dev-form" class="dev-form" hidden>
+        <label for="dev-pw" style="font-size:12.5px;color:var(--muted)">Mot de passe développeur</label>
+        <div class="dev-form-row">
+          <input id="dev-pw" type="password" placeholder="Saisir le mot de passe" autocomplete="off" required maxlength="256">
+          <button type="submit" class="primary" style="min-height:38px;font-size:13px;padding:8px 16px">Déverrouiller</button>
+          <button type="button" class="ghost" id="btn-dev-cancel">Annuler</button>
+        </div>
+        <div class="msg" id="dev-msg" style="margin-top:8px"></div>
+      </form>
+    </div>
+  </section>
 </main>
 
 <script>
 const $ = id => document.getElementById(id);
 let token = "__STUDIO_SESSION_TOKEN__";
 let state = null;
+let developer = false;
 let currentView = "play";
 let lastLogEntries = [];
 let failCount = 0;
@@ -441,7 +525,7 @@ function savePrefs() {
 ["opt-console","opt-fast","opt-dstorage"].forEach(id => $(id).addEventListener("change", savePrefs));
 loadPrefs();
 
-// API robuste : auto-rafraîchissement du token sur 401 + timeout propre
+// API fiable : auto-reconnexion token sur 401 + timeout propre + jamais d'erreur muette
 async function api(path, opts = {}, retry = true) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 5000);
@@ -464,7 +548,7 @@ async function api(path, opts = {}, retry = true) {
     if (!res.ok) throw new Error((data && data.error) || ("Erreur HTTP " + res.status));
     return data;
   } catch (err) {
-    if (err.name === "AbortError") throw new Error("Délai dépassé (serveur local occupé)");
+    if (err.name === "AbortError") throw new Error("Serveur local momentanément occupé.");
     throw err;
   } finally {
     clearTimeout(timer);
@@ -486,15 +570,38 @@ function setConn(mode, text) {
   $("conn-text").textContent = text;
 }
 
+function openView(v) {
+  if (!developer && (v === "diag" || v === "logs")) v = "play";
+  currentView = v;
+  document.querySelectorAll(".tab").forEach(b => b.classList.toggle("active", b.dataset.view === v));
+  document.querySelectorAll(".view").forEach(s => s.classList.toggle("active", s.id === "view-" + v));
+  $("main").classList.toggle("wide", v === "diag" || v === "logs");
+  if (v === "logs") refreshLogs();
+}
+
+function applyDev(on) {
+  developer = Boolean(on);
+  document.body.classList.toggle("developer", developer);
+  $("dev-status").textContent = developer ? "Activé — outils techniques déverrouillés" : "Désactivé — protégé par mot de passe";
+  $("dev-status").className = developer ? "green" : "";
+  $("btn-dev-toggle").textContent = developer ? "Désactiver" : "Activer";
+  if (!developer) {
+    ["opt-debug","opt-surface","opt-warp"].forEach(id => $(id).checked = false);
+    if (currentView === "diag" || currentView === "logs") openView("play");
+  }
+}
+
 function renderState() {
   if (!state) return;
+  applyDev(state.developer);
   const cur = state.current || {};
+  const prev = state.previous || {};
   const versions = state.versions || [];
   const primary = versions[0];
 
-  // Builds dropdown
+  // Versions
   const sel = $("opt-version");
-  const prev = sel.value;
+  const keep = sel.value;
   const sig = versions.map(v => v.name).join("|");
   if (sel.dataset.sig !== sig) {
     sel.dataset.sig = sig;
@@ -502,45 +609,95 @@ function renderState() {
     versions.forEach((v, i) => {
       const opt = document.createElement("option");
       opt.value = v.name;
-      opt.textContent = i === 0 ? `Actuel · ${fmtDate(v.date)}` : v.name;
+      opt.textContent = i === 0 ? `Build actuel · ${fmtDate(v.date)}` : v.name;
       sel.append(opt);
     });
-    if (versions.some(v => v.name === prev)) sel.value = prev;
+    if (versions.some(v => v.name === keep)) sel.value = keep;
   }
   const activeBuild = versions.find(v => v.name === sel.value) || primary;
-  $("meta-build").textContent = activeBuild
-    ? `Moteur : ${fmtDate(activeBuild.date)} (${(activeBuild.size / 1048576).toFixed(1)} Mo)`
-    : "Moteur introuvable";
-  $("meta-build-detail").textContent = activeBuild ? activeBuild.name : "Aucun exécutable";
-  $("meta-title").textContent = state.titleName ? `Jeu : ${state.titleName}` : "Jeu non détecté";
+  $("meta-build-detail").textContent = activeBuild
+    ? `${activeBuild.name} · ${(activeBuild.size / 1048576).toFixed(1)} Mo · ${fmtDate(activeBuild.date)}`
+    : "Aucun exécutable";
+  $("diag-build").textContent = activeBuild
+    ? `Build local : ${activeBuild.name} (${(activeBuild.size / 1048576).toFixed(1)} Mo) · ${fmtDate(activeBuild.date)}`
+    : "Aucun build détecté";
 
-  // Buttons
+  // Boutons Lancer / Arrêter
   $("btn-launch").hidden = Boolean(state.running);
   $("btn-launch").disabled = !activeBuild || !state.title;
   $("btn-stop").hidden = !state.running;
 
-  // Telemetry
-  $("st-fps").textContent = cur.fps != null ? cur.fps.toFixed(1) : "—";
-  $("st-ms").textContent = cur.ms != null ? `${cur.ms.toFixed(0)} ms` : "—";
-  $("st-draws").textContent = cur.draws != null ? cur.draws.toLocaleString("fr-FR") : "—";
-
-  const ex = $("st-exit");
+  // Résumé discret sur la carte Jouer + pastille
   if (state.running) {
-    ex.textContent = "En cours";
-    ex.className = "green";
-    setConn("live", cur.fps != null ? `En jeu · ${cur.fps.toFixed(1)} fps` : "Jeu en cours");
-  } else if (cur.exit === "0") {
-    ex.textContent = "OK (0)";
-    ex.className = "green";
-    setConn("", "Prêt");
-  } else if (cur.exit != null) {
-    ex.textContent = `Code ${cur.exit}`;
-    ex.className = "red";
-    setConn("", "Prêt");
+    const liveInfo = cur.fps != null ? `${cur.fps.toFixed(1)} fps · ${cur.ms.toFixed(0)} ms` : "Démarrage…";
+    $("play-summary").textContent = `En jeu · ${liveInfo}`;
+    $("play-summary").className = "green";
+    setConn("live", `En jeu · ${cur.fps != null ? cur.fps.toFixed(1) + " fps" : "actif"}`);
   } else {
-    ex.textContent = "Prêt";
-    ex.className = "";
-    setConn("", "Prêt");
+    const exTxt = cur.exit === "0" ? "Arrêt normal" : cur.exit != null ? `Code ${cur.exit}` : "Prêt";
+    const fpsTxt = cur.fps != null ? ` · ${cur.fps.toFixed(1)} fps` : "";
+    $("play-summary").textContent = `Dernière session : ${exTxt}${fpsTxt}`;
+    $("play-summary").className = cur.exit === "0" ? "green" : cur.exit != null ? "red" : "";
+    setConn("", developer ? "Local · Dev" : "Local · Prêt");
+  }
+
+  // Diagnostics (mode dev)
+  if (developer) {
+    $("st-fps").textContent = cur.fps != null ? cur.fps.toFixed(1) : "—";
+    $("st-ms").textContent = cur.ms != null ? `${cur.ms.toFixed(0)} ms` : "—";
+    $("st-draws").textContent = cur.draws != null ? cur.draws.toLocaleString("fr-FR") : "—";
+    const ex = $("st-exit");
+    ex.textContent = state.running ? "En cours" : cur.exit === "0" ? "OK (0)" : cur.exit != null ? `Code ${cur.exit}` : "—";
+    ex.className = (state.running || cur.exit === "0") ? "green" : cur.exit != null ? "red" : "";
+
+    const rows = $("diag-rows");
+    rows.replaceChildren();
+    for (const [k, lbl] of [
+      ["validation","Messages D3D12"],
+      ["unsupported","Opérations non supportées"],
+      ["rejected","Pipelines rejetés"],
+      ["slow","Soumissions lentes"],
+      ["fatal","Erreurs GPU fatales"],
+    ]) {
+      const n = (cur.counts && cur.counts[k]) || 0;
+      const d = n - ((prev.counts && prev.counts[k]) || 0);
+      const r = document.createElement("div"); r.className = "row";
+      const s = document.createElement("span"); s.textContent = lbl;
+      const right = document.createElement("div"); right.style.cssText = "display:flex;gap:10px;align-items:center";
+      if (prev.meta && cur.meta) {
+        const dl = document.createElement("span");
+        dl.style.fontSize = "11.5px";
+        dl.className = d < 0 ? "green" : d > 0 ? "amber" : "";
+        dl.textContent = (d > 0 ? "+" : "") + d;
+        right.append(dl);
+      }
+      const b = document.createElement("strong");
+      b.textContent = cur.meta ? n.toLocaleString("fr-FR") : "—";
+      if (k === "fatal" && n > 0) b.className = "red";
+      right.append(b);
+      r.append(s, right);
+      rows.append(r);
+    }
+
+    const codesEl = $("diag-codes");
+    codesEl.replaceChildren();
+    const codes = Object.entries(cur.codes || {}).sort((a,b) => b[1] - a[1]).slice(0, 6);
+    if (!codes.length) {
+      const e = document.createElement("div");
+      e.style.color = "var(--muted)"; e.style.fontSize = "12px";
+      e.textContent = "Aucun message Direct3D enregistré.";
+      codesEl.append(e);
+    } else {
+      for (const [id, n] of codes) {
+        const w = document.createElement("div"); w.className = "bar-wrap";
+        const l = document.createElement("div"); l.className = "bar-lbl";
+        l.innerHTML = `<span>ID ${id}</span><strong>${n.toLocaleString("fr-FR")}</strong>`;
+        const tr = document.createElement("div"); tr.className = "track";
+        const fl = document.createElement("div"); fl.className = "fill";
+        fl.style.width = (n / codes[0][1] * 100) + "%";
+        tr.append(fl); w.append(l, tr); codesEl.append(w);
+      }
+    }
   }
 }
 
@@ -549,7 +706,7 @@ async function pollState() {
     state = await api("/api/state");
     failCount = 0;
     renderState();
-    if (currentView === "logs") await refreshLogs();
+    if (currentView === "logs" && developer) await refreshLogs();
   } catch {
     failCount++;
     setConn(failCount >= 3 ? "off" : "warn", failCount >= 3 ? "Serveur arrêté" : "Reconnexion…");
@@ -563,6 +720,7 @@ async function pollState() {
 }
 
 async function refreshLogs() {
+  if (!developer) return;
   const q = encodeURIComponent($("log-q").value);
   const lvl = encodeURIComponent($("log-lvl").value);
   try {
@@ -577,8 +735,7 @@ async function refreshLogs() {
     const atBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 40;
     const frag = document.createDocumentFragment();
     for (const e of lastLogEntries) {
-      const row = document.createElement("div");
-      row.className = "log-line";
+      const row = document.createElement("div"); row.className = "log-line";
       const n = document.createElement("span"); n.className = "log-n"; n.textContent = e.n;
       const l = document.createElement("span"); l.className = "log-lvl " + e.lvl; l.textContent = e.lvl;
       const t = document.createElement("span"); t.className = "log-txt"; t.textContent = e.text;
@@ -593,17 +750,11 @@ async function refreshLogs() {
 }
 
 // Navigation
-document.querySelectorAll(".tab").forEach(btn => {
-  btn.onclick = () => {
-    currentView = btn.dataset.view;
-    document.querySelectorAll(".tab").forEach(b => b.classList.toggle("active", b === btn));
-    document.querySelectorAll(".view").forEach(v => v.classList.toggle("active", v.id === "view-" + currentView));
-    $("main").classList.toggle("wide", currentView === "logs");
-    if (currentView === "logs") refreshLogs();
-  };
-});
+document.querySelectorAll(".tab").forEach(btn => btn.onclick = () => openView(btn.dataset.view));
+$("brand-home").onclick = () => openView("play");
+$("btn-go-logs").onclick = () => openView("logs");
 
-// Actions
+// Lancer / Arrêter
 $("btn-launch").onclick = async () => {
   $("btn-launch").disabled = true;
   setMsg("Lancement du jeu…");
@@ -616,12 +767,12 @@ $("btn-launch").onclick = async () => {
         console: $("opt-console").value,
         fastGpu: $("opt-fast").checked,
         dstorageNotify: $("opt-dstorage").checked,
-        debug: $("opt-debug").checked,
-        surface: $("opt-surface").checked,
-        warp: $("opt-warp").checked,
+        debug: developer && $("opt-debug").checked,
+        surface: developer && $("opt-surface").checked,
+        warp: developer && $("opt-warp").checked,
       }),
     });
-    setMsg("Jeu lancé.", "ok");
+    setMsg("Jeu lancé !", "ok");
     await pollState();
   } catch (err) {
     setMsg(err.message || "Impossible de lancer le jeu.", "err");
@@ -642,6 +793,53 @@ $("btn-stop").onclick = async () => {
   }
 };
 
+// Mode développeur (mot de passe)
+$("btn-dev-toggle").onclick = async () => {
+  $("dev-msg").textContent = "";
+  if (developer) {
+    try {
+      await api("/api/developer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: false }),
+      });
+      await pollState();
+    } catch (err) {
+      $("dev-msg").textContent = err.message;
+      $("dev-msg").className = "msg err";
+    }
+  } else {
+    $("dev-form").hidden = false;
+    $("dev-pw").focus();
+  }
+};
+$("btn-dev-cancel").onclick = () => {
+  $("dev-form").hidden = true;
+  $("dev-pw").value = "";
+  $("dev-msg").textContent = "";
+};
+$("dev-form").onsubmit = async e => {
+  e.preventDefault();
+  const pw = $("dev-pw").value;
+  $("dev-pw").value = "";
+  $("dev-msg").textContent = "Vérification…";
+  $("dev-msg").className = "msg";
+  try {
+    await api("/api/developer", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: true, password: pw }),
+    });
+    $("dev-form").hidden = true;
+    $("dev-msg").textContent = "";
+    await pollState();
+  } catch (err) {
+    $("dev-msg").textContent = err.message || "Mot de passe incorrect.";
+    $("dev-msg").className = "msg err";
+  }
+};
+
+// Journaux
 let logDebounce = null;
 $("log-q").oninput = () => { clearTimeout(logDebounce); logDebounce = setTimeout(refreshLogs, 150); };
 $("log-lvl").onchange = refreshLogs;

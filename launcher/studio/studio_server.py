@@ -3,6 +3,8 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
+import hashlib
+import hmac
 import json
 import os
 import re
@@ -14,15 +16,20 @@ import time
 
 BASE = Path(__file__).resolve().parent
 ENGINE = BASE.parents[1]
+AUTH_FILE = Path(os.environ["LOCALAPPDATA"]) / "VIce" / "studio-auth.json"
 LOGDIR = Path(os.environ["LOCALAPPDATA"]) / "VIce" / "launcher"
 
 SERVER_VERSION = "VIce Studio local v4"
 TOKEN = secrets.token_urlsafe(24)
 
+DEV_LOCK = threading.Lock()
+DEV = False
+LAST_ATTEMPT = 0.0
+
 PROC_LOCK = threading.Lock()
 PROC = None
 LIVE_LOCK = threading.Lock()
-LIVE_LINES = deque(maxlen=500)
+LIVE_LINES = deque(maxlen=600)
 LIVE_STATE = {
     "start": None,
     "exit": None,
@@ -30,7 +37,9 @@ LIVE_STATE = {
     "ms": None,
     "draws": None,
     "dropped": None,
+    "maxFrame": None,
     "counts": {},
+    "codes": {},
 }
 
 DISK_CACHE_LOCK = threading.Lock()
@@ -40,6 +49,8 @@ ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 FPS_RE = re.compile(
     r"(\d+(?:\.\d+)?)\s+fps,\s+(\d+(?:\.\d+)?)\s+ms/frame.*?(\d+)\s+draws/frame(?:,\s+dropped\s+(\d+))?"
 )
+FRAME_RE = re.compile(r"\bframe=(\d+)")
+ID_RE = re.compile(r"id=(\d+)")
 LOG_CATEGORIES = (
     ("host pipeline refused", "Pipeline rejected"),
     ("host mesh pipeline refused", "Mesh pipeline rejected"),
@@ -54,6 +65,19 @@ LOG_CATEGORIES = (
 class LocalServer(ThreadingHTTPServer):
     allow_reuse_address = True
     daemon_threads = True
+
+
+def verify_password(password):
+    if not isinstance(password, str) or len(password) > 256:
+        return False
+    try:
+        cfg = json.loads(AUTH_FILE.read_text(encoding="utf-8"))
+        calculated = hashlib.pbkdf2_hmac(
+            "sha256", password.encode("utf-8"), bytes.fromhex(cfg["salt"]), 600000
+        )
+        return hmac.compare_digest(calculated, bytes.fromhex(cfg["hash"]))
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
 
 
 def resolve_engine(version):
@@ -144,6 +168,9 @@ def stop_game():
 def parse_line_metrics(line, target):
     if "D3D12:" in line:
         target["counts"]["validation"] = target["counts"].get("validation", 0) + 1
+        m = ID_RE.search(line)
+        if m:
+            target["codes"][m.group(1)] = target["codes"].get(m.group(1), 0) + 1
     if "is not supported" in line:
         target["counts"]["unsupported"] = target["counts"].get("unsupported", 0) + 1
     if "host pipeline refused" in line or "host mesh pipeline refused" in line:
@@ -156,6 +183,11 @@ def parse_line_metrics(line, target):
         target["exit"] = line.split(":", 1)[1].strip()
     elif line.startswith("VIce session "):
         target["start"] = line.removeprefix("VIce session ").strip()
+    fm = FRAME_RE.search(line)
+    if fm:
+        val = int(fm.group(1))
+        if target["maxFrame"] is None or val > target["maxFrame"]:
+            target["maxFrame"] = val
     m = FPS_RE.search(line)
     if m:
         target["fps"] = float(m.group(1))
@@ -165,7 +197,7 @@ def parse_line_metrics(line, target):
             target["dropped"] = int(m.group(4))
 
 
-def read_tail_lines(path, max_bytes=393216, max_lines=500):
+def read_tail_lines(path, max_bytes=393216, max_lines=600):
     try:
         size = path.stat().st_size
         with path.open("rb") as f:
@@ -178,10 +210,25 @@ def read_tail_lines(path, max_bytes=393216, max_lines=500):
             else:
                 raw = f.read()
         text = ANSI.sub("", raw.decode("utf-8", errors="replace"))
-        lines = text.splitlines()
-        return lines[-max_lines:]
+        return text.splitlines()[-max_lines:]
     except OSError:
         return []
+
+
+def empty_session():
+    return {
+        "meta": None,
+        "start": None,
+        "exit": None,
+        "fps": None,
+        "ms": None,
+        "draws": None,
+        "dropped": None,
+        "maxFrame": None,
+        "counts": {},
+        "codes": {},
+        "lines": [],
+    }
 
 
 def read_disk_session(filename):
@@ -189,17 +236,7 @@ def read_disk_session(filename):
     try:
         st = path.stat()
     except OSError:
-        return {
-            "meta": None,
-            "start": None,
-            "exit": None,
-            "fps": None,
-            "ms": None,
-            "draws": None,
-            "dropped": None,
-            "counts": {},
-            "lines": [],
-        }
+        return empty_session()
 
     sig = (st.st_mtime_ns, st.st_size)
     with DISK_CACHE_LOCK:
@@ -208,7 +245,6 @@ def read_disk_session(filename):
             return cached[1]
 
     lines = read_tail_lines(path, max_bytes=524288, max_lines=600)
-    # Grab header start timestamp if truncated
     start_ts = None
     try:
         with path.open("r", encoding="utf-8", errors="replace") as f:
@@ -218,21 +254,14 @@ def read_disk_session(filename):
     except OSError:
         pass
 
-    summary = {
-        "meta": {
-            "name": path.name,
-            "date": datetime.fromtimestamp(st.st_mtime).isoformat(timespec="seconds"),
-            "size": st.st_size,
-        },
-        "start": start_ts,
-        "exit": None,
-        "fps": None,
-        "ms": None,
-        "draws": None,
-        "dropped": None,
-        "counts": {},
-        "lines": lines,
+    summary = empty_session()
+    summary["meta"] = {
+        "name": path.name,
+        "date": datetime.fromtimestamp(st.st_mtime).isoformat(timespec="seconds"),
+        "size": st.st_size,
     }
+    summary["start"] = start_ts
+    summary["lines"] = lines
     for line in lines:
         parse_line_metrics(line, summary)
     if start_ts and not summary["start"]:
@@ -254,7 +283,9 @@ def current_session_summary(include_lines=False):
                 "ms": LIVE_STATE["ms"],
                 "draws": LIVE_STATE["draws"],
                 "dropped": LIVE_STATE["dropped"],
+                "maxFrame": LIVE_STATE["maxFrame"],
                 "counts": dict(LIVE_STATE["counts"]),
+                "codes": dict(LIVE_STATE["codes"]),
             }
             if include_lines:
                 data["lines"] = list(LIVE_LINES)
@@ -269,20 +300,59 @@ def current_session_summary(include_lines=False):
 
 
 def build_state():
+    with DEV_LOCK:
+        dev = DEV
     title = resolve_title()
+    versions = list_versions()
+    cur = current_session_summary(include_lines=False)
+    prev = dict(read_disk_session("play.previous.log"))
+    prev.pop("lines", None)
+
+    if not dev:
+        versions = [v for v in versions if v["name"] == "victory.exe"]
+        cur = {
+            "meta": cur["meta"],
+            "start": cur["start"],
+            "exit": cur["exit"],
+            "fps": cur["fps"],
+            "ms": cur["ms"],
+            "draws": None,
+            "dropped": None,
+            "maxFrame": None,
+            "counts": {},
+            "codes": {},
+        }
+        prev = {
+            "meta": None,
+            "start": None,
+            "exit": None,
+            "fps": None,
+            "ms": None,
+            "draws": None,
+            "dropped": None,
+            "maxFrame": None,
+            "counts": {},
+            "codes": {},
+        }
+
     return {
         "server": SERVER_VERSION,
+        "developer": dev,
         "running": is_running(),
-        "title": str(title) if title else None,
+        "title": str(title) if (title and dev) else bool(title),
         "titleName": title.name if title else None,
-        "versions": list_versions(),
-        "current": current_session_summary(include_lines=False),
+        "versions": versions,
+        "current": cur,
+        "previous": prev,
     }
 
 
-def launch_game(cfg):
+def launch_game(cfg, developer):
     global PROC
-    engine = resolve_engine(cfg.get("version", "victory.exe"))
+    version = cfg.get("version", "victory.exe")
+    if not developer:
+        version = "victory.exe"
+    engine = resolve_engine(version)
     if not engine.is_file():
         raise ValueError(f"Exécutable moteur introuvable : {engine.name}")
     title = resolve_title()
@@ -297,8 +367,8 @@ def launch_game(cfg):
     env = os.environ.copy()
     env["NO_COLOR"] = "1"
 
-    fast_gpu = bool(cfg.get("fastGpu", True))
-    dstorage_notify = bool(cfg.get("dstorageNotify", True))
+    fast_gpu = bool(cfg.get("fastGpu", True)) if developer else True
+    dstorage_notify = bool(cfg.get("dstorageNotify", True)) if developer else True
 
     if fast_gpu:
         env["VICTORY_RELAY"] = "2"
@@ -321,7 +391,7 @@ def launch_game(cfg):
         ("VICE_SURFACE_STATS", "surface"),
     ):
         env.pop(env_key, None)
-        if cfg.get(opt_key):
+        if developer and cfg.get(opt_key):
             env[env_key] = "1"
 
     with PROC_LOCK:
@@ -358,7 +428,9 @@ def launch_game(cfg):
                 "ms": None,
                 "draws": None,
                 "dropped": None,
+                "maxFrame": None,
                 "counts": {},
+                "codes": {},
             }
         )
 
@@ -431,8 +503,7 @@ def filter_logs(lines, query="", severity="all", limit=350):
         if q and q not in line.lower():
             continue
         out.append({"n": idx, "lvl": lvl, "text": line})
-    total = len(out)
-    return out[-limit:], total
+    return out[-limit:], len(out)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -500,6 +571,11 @@ class Handler(BaseHTTPRequestHandler):
         if req.path == "/api/logs":
             if not self.check_token():
                 return
+            with DEV_LOCK:
+                dev = DEV
+            if not dev:
+                self.send_json(403, {"error": "Mode développeur requis."})
+                return
             qs = parse_qs(req.query)
             q = (qs.get("q") or [""])[0]
             sev = (qs.get("level") or ["all"])[0]
@@ -515,6 +591,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(404, {"error": "Route introuvable."})
 
     def do_POST(self):
+        global DEV, LAST_ATTEMPT
         if not self.local_host():
             self.send_json(403, {"error": "Accès local uniquement."})
             return
@@ -528,6 +605,11 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if req.path == "/api/open-log-dir":
+            with DEV_LOCK:
+                dev = DEV
+            if not dev:
+                self.send_json(403, {"error": "Mode développeur requis."})
+                return
             LOGDIR.mkdir(parents=True, exist_ok=True)
             try:
                 os.startfile(str(LOGDIR))
@@ -535,6 +617,34 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(500, {"error": str(exc)})
                 return
             self.send_json(200, {"ok": True})
+            return
+
+        if req.path == "/api/developer":
+            try:
+                n = int(self.headers.get("Content-Length", "0"))
+                if not 0 < n <= 4096:
+                    raise ValueError("Requête invalide.")
+                cfg = json.loads(self.rfile.read(n).decode("utf-8"))
+                if not isinstance(cfg, dict):
+                    raise ValueError("Configuration invalide.")
+                with DEV_LOCK:
+                    if cfg.get("enabled") is False:
+                        DEV = False
+                    elif cfg.get("enabled") is True:
+                        now = time.monotonic()
+                        if now - LAST_ATTEMPT < 1.0:
+                            self.send_json(429, {"error": "Réessaie dans un instant."})
+                            return
+                        LAST_ATTEMPT = now
+                        if not verify_password(cfg.get("password")):
+                            self.send_json(403, {"error": "Mot de passe incorrect."})
+                            return
+                        DEV = True
+                    else:
+                        raise ValueError("Mode invalide.")
+                self.send_json(200, {"developer": DEV})
+            except (ValueError, TypeError, json.JSONDecodeError) as exc:
+                self.send_json(400, {"error": str(exc)})
             return
 
         if req.path in ("/api/launch", "/api/open-launcher"):
@@ -545,7 +655,9 @@ class Handler(BaseHTTPRequestHandler):
                 cfg = json.loads(self.rfile.read(n).decode("utf-8"))
                 if not isinstance(cfg, dict):
                     raise ValueError("Configuration invalide.")
-                launch_game(cfg)
+                with DEV_LOCK:
+                    dev = DEV
+                launch_game(cfg, dev)
                 self.send_json(200, {"ok": True, "running": True})
             except RuntimeError as exc:
                 self.send_json(409, {"error": str(exc)})
@@ -562,8 +674,8 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     if "--self-test" in sys.argv:
         st = build_state()
-        assert "versions" in st and "current" in st
-        print("Self-test OK:", len(st["versions"]), "builds, title=", st["titleName"])
+        assert "versions" in st and "current" in st and "developer" in st
+        print("Self-test OK:", len(st["versions"]), "builds, dev=", st["developer"])
         sys.exit(0)
 
     port = 0 if "--no-browser" in sys.argv else 17642
@@ -602,7 +714,7 @@ if __name__ == "__main__":
                 [
                     str(chrome),
                     "--app=" + url,
-                    "--window-size=980,720",
+                    "--window-size=1120,760",
                     "--user-data-dir=" + str(Path(os.environ["LOCALAPPDATA"]) / "VIce" / "studio-browser"),
                 ]
             )
