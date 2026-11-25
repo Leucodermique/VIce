@@ -1921,7 +1921,7 @@ impl State {
             // What a bake may read must be there now: up to 2 GiB.
             (left, 2 << 30)
         } else if first && early_ms > 0 {
-            (early_ms, 64 << 20)
+            (early_ms, 256 << 20)
         } else {
             return;
         };
@@ -2111,7 +2111,7 @@ impl State {
         if room {
             host.texture_slots_waiting(frame);
         }
-        let (due, census) = host.texture_slots_due(frame, 4096);
+        let (due, census) = host.texture_slots_due(frame, 8192);
         HEAP_TEXTURES_WAITING.store(census[0], Ordering::Relaxed);
         for (count, now) in HEAP_TEXTURES_QUEUE.iter().zip(census) {
             count.store(now, Ordering::Relaxed);
@@ -2131,7 +2131,7 @@ impl State {
         let took = now.saturating_sub(PASSED.swap(now, Ordering::Relaxed)).max(1);
         // The worker may run two passes in a frame: no shorter than that.
         let took = if matches!(into, Into::Ahead(_)) { took.max(100) } else { took };
-        let most = (4000 / took).clamp(16, 256);
+        let most = (1500 / took).clamp(4, 64);
         // What a table entry of a texture a shader samples says.
         let sampled = UsedResource {
             kind: ResourceType::Srv,
