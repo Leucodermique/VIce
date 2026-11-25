@@ -1407,11 +1407,18 @@ pub(crate) fn room() -> bool {
     // there is read over the bus: slower, not missing.
     static SPILL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     let spill = *SPILL.get_or_init(|| std::env::var_os("VICTORY_TEXTURE_SPILL").is_none_or(|v| v != "0"));
+    static SPILL_PERCENT: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    let spill_pct = *SPILL_PERCENT.get_or_init(|| {
+        std::env::var("VICTORY_TEXTURE_SPILL_PERCENT")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .map_or(75, |p| p.clamp(0, 95))
+    });
     match crate::host::host().and_then(|h| h.video_memory()) {
         Some([budget, used, ..]) if !spill => used < budget / 100 * room_percent(),
         Some([budget, used, shared_budget, shared_used]) => {
             let own = budget / 100 * room_percent();
-            used < own || used + shared_used < own + shared_budget / 2
+            used < own || used + shared_used < own + shared_budget / 100 * spill_pct
         }
         None => filled < WITHOUT_BUDGET,
     }
@@ -1431,7 +1438,7 @@ fn room_percent() -> u64 {
         std::env::var("VICTORY_TEXTURE_ROOM_PERCENT")
             .ok()
             .and_then(|v| v.trim().parse::<u64>().ok())
-            .map_or(90, |percent| percent.clamp(50, 97))
+            .map_or(94, |percent| percent.clamp(50, 97))
     })
 }
 
