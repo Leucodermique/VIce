@@ -1325,6 +1325,14 @@ pub(crate) fn host_subresource(this: This, index: u32) -> Option<u32> {
     (mip >= drop).then(|| mip - drop + slice * (mips - drop))
 }
 
+/// Subresources in the first plane of title texture `this`, as the title
+/// numbers them (levels times slices).
+#[cfg(windows)]
+pub(crate) fn title_subresources(this: This) -> u32 {
+    let desc = &resource(this).desc;
+    u32::from(desc.mip_levels).max(1) * u32::from(desc.depth_or_array_size).max(1)
+}
+
 /// Maps a readback before creating a host texture. Ordinary textures keep
 /// their native subresource numbering. Shrunken textures support plane zero.
 #[cfg(windows)]
