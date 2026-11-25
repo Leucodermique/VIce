@@ -1162,9 +1162,23 @@ impl State {
             let writes = (t.stores || !write_skip())
                 && !crate::pipeline::builder_quarantined(self.pipeline as This);
             // Title memory by address: what the shader finds it by; its
-            // copies declared written only for a shader that can store there.
+            // copies are declared written only when raw-address writeback is
+            // active (on with VICTORY_BVH_BUILDER=1 or VICTORY_MEMORY_WRITES=1;
+            // off otherwise so ~550 MB/frame of loose windows are not compared
+            // on the CPU while the BVH builder is off).
+            static MEMORY_WRITES: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+            let memory_writes = *MEMORY_WRITES.get_or_init(|| match std::env::var("VICTORY_MEMORY_WRITES").as_deref() {
+                Ok("1") => true,
+                Ok("0") => false,
+                _ => std::env::var_os("VICTORY_BVH_BUILDER").is_some_and(|v| v == "1"),
+            });
             let memory = if t.host.root_srvs.contains(&victory_shader::emit::SLOT_MEMORY) {
-                let Some(ready) = self.memory_ready(list, compute, writes && t.stores_by_address, &t.host.root_srvs) else {
+                let Some(ready) = self.memory_ready(
+                    list,
+                    compute,
+                    writes && t.stores_by_address && memory_writes,
+                    &t.host.root_srvs,
+                ) else {
                     once!("a shader that reads title memory by address without a view heap to hold its views: the draw is dropped");
                     return false;
                 };

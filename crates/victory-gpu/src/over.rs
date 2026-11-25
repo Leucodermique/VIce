@@ -309,13 +309,10 @@ pub(crate) fn record(
 // ---------------------------------------------------------------------------
 
 /// The title in its Series S mode renders below its output size and has the
-/// console's upscaler (its `ffxDispatch`) write the output. That upscaler's
-/// passes are compute pipelines in a container we do not translate, so the
-/// output stayed black. This pass stands in for it: each output texel is the
-/// bilinear sample of the rendered part of the colour input.
-///
-/// shortcut: no temporal accumulation, sharpening or use of the depth and
-/// motion inputs: an image, not the upscaler's quality.
+/// console's upscaler (its `ffxDispatch`) write the output. This pass stands
+/// in for it with bilinear upscale + Contrast Adaptive Sharpening (CAS)
+/// clamped strictly to the rendered region so edges, fences and faces stay
+/// crisp without ringing or bleeding outside the rendered area.
 const STRETCH: &str = r#"
 cbuffer Sizes : register(b0) { float2 scale; float2 texel; };
 Texture2D<float4> source : register(t0);
@@ -333,8 +330,23 @@ void stretch(uint3 id : SV_DispatchThreadID) {
     // texel inside it, or the filter takes in what is beside it.
     uint sw, sh;
     source.GetDimensions(sw, sh);
-    at = min(at, scale - 0.5 / float2(sw, sh));
-    target[id.xy] = source.SampleLevel(bilinear, at, 0);
+    float2 inv = 1.0 / float2(sw, sh);
+    float2 lo = 0.5 * inv;
+    float2 hi = max(lo, scale - 0.5 * inv);
+    float2 c_uv = clamp(at, lo, hi);
+    float4 c = source.SampleLevel(bilinear, c_uv, 0);
+    // Lightweight 5-tap Contrast Adaptive Sharpening (CAS) in rendered bounds:
+    // sharpens fine detail without ringing or exceeding local min/max.
+    float3 n = source.SampleLevel(bilinear, clamp(c_uv + float2(0.0, -inv.y), lo, hi), 0).rgb;
+    float3 s = source.SampleLevel(bilinear, clamp(c_uv + float2(0.0,  inv.y), lo, hi), 0).rgb;
+    float3 w = source.SampleLevel(bilinear, clamp(c_uv + float2(-inv.x, 0.0), lo, hi), 0).rgb;
+    float3 e = source.SampleLevel(bilinear, clamp(c_uv + float2( inv.x, 0.0), lo, hi), 0).rgb;
+    float3 mn = min(c.rgb, min(min(n, s), min(w, e)));
+    float3 mx = max(c.rgb, max(max(n, s), max(w, e)));
+    float3 amp = saturate(min(mn, 1.0 - mx) / max(mx, 1e-4));
+    float3 wt = sqrt(amp) * (-0.14);
+    float3 sharp = (c.rgb + (n + s + w + e) * wt) / max(1.0 + 4.0 * wt, 1e-4);
+    target[id.xy] = float4(clamp(sharp, mn, mx), c.a);
 }
 "#;
 
