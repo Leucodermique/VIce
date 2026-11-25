@@ -174,6 +174,56 @@ impl GraphicsState {
         }
     }
 
+    /// Blending off for render targets of an integer format, which D3D12 cannot blend (the
+    /// pipeline is refused with `E_INVALIDARG`, debug layer message 676); the console's
+    /// hardware leaves such a target unblended. With one blend state for all targets
+    /// (`IndependentBlendEnable` off) it is copied to each first, so the others keep it.
+    pub(crate) fn integer_targets_unblended(&mut self) {
+        let integer = |f: DXGI_FORMAT| {
+            matches!(
+                f,
+                DXGI_FORMAT_R32G32B32A32_UINT
+                    | DXGI_FORMAT_R32G32B32A32_SINT
+                    | DXGI_FORMAT_R32G32B32_UINT
+                    | DXGI_FORMAT_R32G32B32_SINT
+                    | DXGI_FORMAT_R16G16B16A16_UINT
+                    | DXGI_FORMAT_R16G16B16A16_SINT
+                    | DXGI_FORMAT_R32G32_UINT
+                    | DXGI_FORMAT_R32G32_SINT
+                    | DXGI_FORMAT_R10G10B10A2_UINT
+                    | DXGI_FORMAT_R8G8B8A8_UINT
+                    | DXGI_FORMAT_R8G8B8A8_SINT
+                    | DXGI_FORMAT_R16G16_UINT
+                    | DXGI_FORMAT_R16G16_SINT
+                    | DXGI_FORMAT_R32_UINT
+                    | DXGI_FORMAT_R32_SINT
+                    | DXGI_FORMAT_R8G8_UINT
+                    | DXGI_FORMAT_R8G8_SINT
+                    | DXGI_FORMAT_R16_UINT
+                    | DXGI_FORMAT_R16_SINT
+                    | DXGI_FORMAT_R8_UINT
+                    | DXGI_FORMAT_R8_SINT
+            )
+        };
+        let count = (self.targets.NumRenderTargets as usize).min(8);
+        let blended = |s: &Self, i: usize| {
+            let t = if s.blend.IndependentBlendEnable.as_bool() { i } else { 0 };
+            s.blend.RenderTarget[t].BlendEnable.as_bool()
+        };
+        let fix: Vec<usize> = (0..count).filter(|&i| integer(self.targets.RTFormats[i]) && blended(self, i)).collect();
+        if fix.is_empty() {
+            return;
+        }
+        if !self.blend.IndependentBlendEnable.as_bool() {
+            let first = self.blend.RenderTarget[0];
+            self.blend.RenderTarget = [first; 8];
+            self.blend.IndependentBlendEnable = true.into();
+        }
+        for i in fix {
+            self.blend.RenderTarget[i].BlendEnable = false.into();
+        }
+    }
+
     /// Everything the state holds, as text: part of a pipeline's name in
     /// the library and of the key a title pipeline is started early by.
     pub(crate) fn describe(&self) -> String {
@@ -690,6 +740,7 @@ impl HostPipeline {
             SampleDesc: g.samples,
             ..Default::default()
         };
+        zero_padding(&mut desc.BlendState, &mut desc.DepthStencilState);
         // A pipeline with the rectangle stage, or the title's geometry stage, has a name of
         // its own in the library; the others keep theirs.
         let name = |gs: Option<&Vec<u8>>| match (title_gs, gs) {
@@ -855,7 +906,9 @@ fn graphics_depth_bounds_pipeline(
         RTFormats: d.RTVFormats,
         NumRenderTargets: d.NumRenderTargets,
     };
-    let base = Stream {
+    let mut depth = depth;
+    zero_depth1_padding(&mut depth);
+    let mut base = Stream {
         root: Sub(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_ROOT_SIGNATURE, root.as_raw()),
         vs: Sub(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_VS, d.VS),
         ps: Sub(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PS, d.PS),
@@ -870,14 +923,27 @@ fn graphics_depth_bounds_pipeline(
         dsv: Sub(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL_FORMAT, d.DSVFormat),
         samples: Sub(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SAMPLE_DESC, d.SampleDesc),
     };
+    zero_gaps(&mut base.root);
+    zero_gaps(&mut base.vs);
+    zero_gaps(&mut base.ps);
+    zero_gaps(&mut base.blend);
+    zero_gaps(&mut base.mask);
+    zero_gaps(&mut base.raster);
+    zero_gaps(&mut base.depth);
+    zero_gaps(&mut base.input);
+    zero_gaps(&mut base.strip_cut);
+    zero_gaps(&mut base.topology);
+    zero_gaps(&mut base.targets);
+    zero_gaps(&mut base.dsv);
+    zero_gaps(&mut base.samples);
     if d.GS.pShaderBytecode.is_null() {
-        let mut stream = base;
-        stream_pipeline(device, &mut stream, name)
+        stream_pipeline(device, &mut base, name)
     } else {
         let mut stream = StreamGs {
             base,
             gs: Sub(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_GS, d.GS),
         };
+        zero_gaps(&mut stream.gs);
         stream_pipeline(device, &mut stream, name)
     }
 }
@@ -980,7 +1046,20 @@ fn mesh_pipeline(
         samples: Sub<DXGI_SAMPLE_DESC>,
         topology: Sub<D3D12_PRIMITIVE_TOPOLOGY_TYPE>,
     }
-    let build = |depth: Sub<_>| {
+    fn zero_stream_gaps<D>(stream: &mut Stream<D>) {
+        zero_gaps(&mut stream.root);
+        zero_gaps(&mut stream.ms);
+        zero_gaps(&mut stream.ps);
+        zero_gaps(&mut stream.blend);
+        zero_gaps(&mut stream.mask);
+        zero_gaps(&mut stream.raster);
+        zero_gaps(&mut stream.depth);
+        zero_gaps(&mut stream.targets);
+        zero_gaps(&mut stream.dsv);
+        zero_gaps(&mut stream.samples);
+        zero_gaps(&mut stream.topology);
+    }
+    let build = |depth: Sub<D3D12_DEPTH_STENCIL_DESC>| {
         let mut stream = Stream {
             root: Sub(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_ROOT_SIGNATURE, root.as_raw()),
             ms: Sub(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_MS, ms),
@@ -997,6 +1076,8 @@ fn mesh_pipeline(
                 D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
             ),
         };
+        zero_padding(&mut stream.blend.1, &mut stream.depth.1);
+        zero_stream_gaps(&mut stream);
         stream_pipeline(device, &mut stream, name)
     };
     if depth_bounds {
@@ -1016,10 +1097,54 @@ fn mesh_pipeline(
                 D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
             ),
         };
+        zero_blend_padding(&mut stream.blend.1);
+        zero_depth1_padding(&mut stream.depth.1);
+        zero_stream_gaps(&mut stream);
         stream_pipeline(device, &mut stream, name)
     } else {
         build(Sub(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL, g.depth))
     }
+}
+
+fn zero_gaps<T>(sub: &mut Sub<T>) {
+    let at = std::mem::offset_of!(Sub<T>, 1);
+    let bytes = (&raw mut *sub).cast::<u8>();
+    // SAFETY: padding bytes of `sub`, inside it.
+    unsafe {
+        bytes.add(4).write_bytes(0, at - 4);
+        bytes.add(at + size_of::<T>()).write_bytes(0, size_of::<Sub<T>>() - at - size_of::<T>());
+    }
+}
+
+fn zero_blend_padding(blend: &mut D3D12_BLEND_DESC) {
+    use std::mem::offset_of;
+    let mask = offset_of!(D3D12_RENDER_TARGET_BLEND_DESC, RenderTargetWriteMask) + 1;
+    for target in &mut blend.RenderTarget {
+        let bytes = (&raw mut *target).cast::<u8>();
+        // SAFETY: the padding after the last field, inside `target`.
+        unsafe { bytes.add(mask).write_bytes(0, size_of::<D3D12_RENDER_TARGET_BLEND_DESC>() - mask) };
+    }
+}
+
+fn zero_depth1_padding(depth: &mut D3D12_DEPTH_STENCIL_DESC1) {
+    use std::mem::offset_of;
+    let (write, front) = (
+        offset_of!(D3D12_DEPTH_STENCIL_DESC1, StencilWriteMask) + 1,
+        offset_of!(D3D12_DEPTH_STENCIL_DESC1, FrontFace),
+    );
+    // SAFETY: the padding between two fields, inside `depth`.
+    unsafe { (&raw mut *depth).cast::<u8>().add(write).write_bytes(0, front - write) };
+}
+
+fn zero_padding(blend: &mut D3D12_BLEND_DESC, depth: &mut D3D12_DEPTH_STENCIL_DESC) {
+    use std::mem::offset_of;
+    zero_blend_padding(blend);
+    let (write, front) = (
+        offset_of!(D3D12_DEPTH_STENCIL_DESC, StencilWriteMask) + 1,
+        offset_of!(D3D12_DEPTH_STENCIL_DESC, FrontFace),
+    );
+    // SAFETY: the padding between two fields, inside `depth`.
+    unsafe { (&raw mut *depth).cast::<u8>().add(write).write_bytes(0, front - write) };
 }
 
 /// The bytes of shader code (none for an absent stage).

@@ -1,0 +1,1312 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VIce Studio</title>
+<style>
+:root{
+  color-scheme:dark;
+  --bg:#16101d;
+  --glass:rgba(28,20,38,.78);
+  --glass-strong:rgba(24,18,34,.90);
+  --line:rgba(255,255,255,.14);
+  --line-hover:rgba(230,181,255,.38);
+  --text:#f5f2f8;
+  --muted:#b4a7c2;
+  --accent:#c88fff;
+  --pink:#e052c8;
+  --violet:#7c4dff;
+  --green:#78e6b1;
+  --red:#ff8492;
+  --amber:#f5c273;
+  --radius:16px;
+}
+*{box-sizing:border-box}
+html,body{min-height:100%;margin:0}
+body{
+  background:
+    linear-gradient(180deg,rgba(20,13,29,.22) 0%,rgba(20,14,30,.52) 55%,rgba(16,11,24,.90) 100%),
+    url('/art/sunset.svg') center center / cover fixed no-repeat,
+    var(--bg);
+  color:var(--text);
+  font:13.5px/1.5 "Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased;
+  display:flex;
+  flex-direction:column;
+}
+body:not(.developer) .dev-only{display:none!important}
+
+/* Intro cinématique VIce Studio */
+#studio-intro{
+  position:fixed;
+  inset:0;
+  z-index:100;
+  background:radial-gradient(circle at 50% 46%,#201033 0%,#0b0711 58%,#050308 100%);
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  cursor:pointer;
+  overflow:hidden;
+  transition:opacity .55s cubic-bezier(.2,.8,.2,1),visibility .55s;
+}
+#studio-intro.done{opacity:0;visibility:hidden;pointer-events:none}
+.intro-glow{
+  position:absolute;
+  width:460px;height:460px;border-radius:50%;
+  background:radial-gradient(circle,rgba(196,86,240,.34) 0%,rgba(124,77,255,.16) 42%,transparent 72%);
+  filter:blur(26px);
+  animation:introGlow 2.1s cubic-bezier(.16,1,.3,1) both;
+}
+.intro-emblem{
+  position:relative;
+  width:min(240px,54vw);
+  height:min(240px,54vw);
+  object-fit:contain;
+  mix-blend-mode:screen;
+  filter:drop-shadow(0 0 28px rgba(208,92,240,.55));
+  animation:introLogo 1.45s cubic-bezier(.16,1,.3,1) both;
+}
+.intro-bar{
+  position:relative;
+  width:150px;
+  height:2px;
+  margin-top:16px;
+  border-radius:99px;
+  background:linear-gradient(90deg,transparent,#9e6bff,#f062d8,#ff9d76,transparent);
+  transform-origin:center;
+  animation:introBar 1.1s .38s cubic-bezier(.16,1,.3,1) both;
+}
+.intro-title{
+  position:relative;
+  margin-top:14px;
+  font-size:12px;
+  font-weight:650;
+  letter-spacing:.42em;
+  text-transform:uppercase;
+  color:rgba(248,232,252,.88);
+  padding-left:.42em;
+  animation:introText 1.0s .55s cubic-bezier(.16,1,.3,1) both;
+}
+.intro-skip{
+  position:absolute;
+  bottom:22px;
+  font-size:11px;
+  letter-spacing:.12em;
+  color:rgba(220,200,235,.42);
+}
+@keyframes introGlow{
+  from{opacity:0;transform:scale(.55)}
+  60%{opacity:1;transform:scale(1.06)}
+  to{opacity:.85;transform:scale(1)}
+}
+@keyframes introLogo{
+  from{opacity:0;transform:scale(.82) translateY(14px);filter:blur(10px) drop-shadow(0 0 0 rgba(208,92,240,0))}
+  65%{opacity:1;transform:scale(1.02) translateY(0);filter:blur(0) drop-shadow(0 0 34px rgba(208,92,240,.65))}
+  to{opacity:1;transform:scale(1) translateY(0);filter:blur(0) drop-shadow(0 0 24px rgba(208,92,240,.5))}
+}
+@keyframes introBar{
+  from{opacity:0;transform:scaleX(0)}
+  to{opacity:1;transform:scaleX(1)}
+}
+@keyframes introText{
+  from{opacity:0;transform:translateY(8px);letter-spacing:.6em}
+  to{opacity:1;transform:translateY(0);letter-spacing:.42em}
+}
+
+/* Barre supérieure ultra-épurée */
+header{
+  height:58px;
+  padding:0 26px;
+  background:rgba(19,13,28,.62);
+  backdrop-filter:blur(18px);
+  border-bottom:1px solid rgba(255,255,255,.10);
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:16px;
+  position:sticky;
+  top:0;
+  z-index:10;
+}
+.head-left,.head-right{display:flex;align-items:center;gap:14px}
+.brand-mini{display:flex;align-items:center;gap:8px;cursor:pointer}
+.brand-mini img{height:24px;width:auto;display:block;filter:drop-shadow(0 2px 8px rgba(0,0,0,.45))}
+.brand-mini span{font-size:10px;letter-spacing:.22em;color:var(--muted);font-weight:650;padding-top:2px}
+nav{display:flex;gap:4px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.10);border-radius:11px;padding:3px}
+.tab{
+  border:0;
+  background:transparent;
+  color:var(--muted);
+  font:inherit;
+  font-size:12.5px;
+  font-weight:550;
+  padding:6px 14px;
+  border-radius:8px;
+  cursor:pointer;
+  transition:background .15s,color .15s;
+}
+.tab:hover{color:#fff}
+.tab.active{
+  background:linear-gradient(105deg,rgba(124,77,255,.85),rgba(204,70,196,.85));
+  color:#fff;
+  box-shadow:0 3px 12px rgba(164,68,216,.32);
+}
+.lang-toggle{
+  display:inline-flex;
+  background:rgba(20,14,29,.65);
+  border:1px solid rgba(255,255,255,.14);
+  border-radius:999px;
+  padding:2px;
+  gap:2px;
+}
+.lang-btn{
+  border:0;
+  background:transparent;
+  color:var(--muted);
+  font-size:11px;
+  font-weight:650;
+  letter-spacing:.05em;
+  padding:4px 9px;
+  border-radius:999px;
+  cursor:pointer;
+  transition:background .15s,color .15s;
+}
+.lang-btn:hover{color:#fff}
+.lang-btn.active{background:rgba(200,143,255,.26);color:#fff}
+
+.status-pill{
+  display:inline-flex;
+  align-items:center;
+  gap:7px;
+  font-size:12px;
+  color:#e2d7ec;
+  background:rgba(20,14,29,.65);
+  border:1px solid rgba(255,255,255,.14);
+  padding:5px 12px;
+  border-radius:999px;
+  white-space:nowrap;
+}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--green);flex:none}
+.dot.warn{background:var(--amber)}
+.dot.off{background:var(--red)}
+.dot.live{background:var(--green);box-shadow:0 0 9px var(--green)}
+
+/* Conteneur principal */
+main{
+  flex:1;
+  width:100%;
+  max-width:720px;
+  margin:0 auto;
+  padding:22px 22px 40px;
+  display:flex;
+  flex-direction:column;
+}
+main.wide{max-width:1060px}
+.view{display:none}
+.view.active{display:block;animation:fade .22s ease-out}
+@keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+/* Hero VIce sur fond GTA 6 */
+.hero-logo-wrap{text-align:center;padding:22px 0 24px}
+.hero-logo{
+  width:clamp(250px,36vw,390px);
+  max-width:82%;
+  height:auto;
+  display:block;
+  margin:0 auto;
+  filter:drop-shadow(0 14px 28px rgba(24,8,38,.78));
+}
+.hero-sub{
+  margin-top:8px;
+  font-size:10px;
+  letter-spacing:.26em;
+  text-transform:uppercase;
+  color:rgba(250,226,242,.72);
+  font-weight:600;
+}
+
+/* Cartes glassmorphism épurées */
+.card{
+  background:var(--glass);
+  backdrop-filter:blur(20px);
+  border:1px solid var(--line);
+  border-radius:var(--radius);
+  padding:22px 24px;
+  box-shadow:0 16px 40px rgba(12,6,22,.42);
+}
+.card.solid{background:var(--glass-strong)}
+
+/* Boutons */
+button{
+  font:inherit;
+  cursor:pointer;
+  border-radius:11px;
+  border:1px solid var(--line);
+  background:rgba(255,255,255,.08);
+  color:var(--text);
+  padding:9px 16px;
+  font-weight:550;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:9px;
+  transition:background .18s,border-color .18s,transform .12s,box-shadow .2s,opacity .15s;
+}
+button:hover:not(:disabled){background:rgba(255,255,255,.14);border-color:var(--line-hover)}
+button:active:not(:disabled){transform:scale(.985)}
+button:disabled{opacity:.55;cursor:not-allowed}
+
+/* Bouton unifié Jouer / Arrêter */
+#btn-play{
+  width:100%;
+  min-height:52px;
+  font-size:15.5px;
+  font-weight:620;
+  letter-spacing:.15px;
+  margin-bottom:18px;
+  position:relative;
+  overflow:hidden;
+}
+#btn-play.mode-play{
+  background:linear-gradient(100deg,var(--violet),var(--pink));
+  border:1px solid rgba(255,204,255,.40);
+  color:#fff;
+  box-shadow:0 8px 26px rgba(186,66,224,.40);
+}
+#btn-play.mode-play:hover:not(:disabled){
+  filter:brightness(1.08);
+  box-shadow:0 10px 30px rgba(210,74,238,.55);
+  transform:translateY(-1px);
+}
+#btn-play.mode-starting{
+  background:linear-gradient(100deg,#5b4498,#8e3d8b);
+  border:1px solid rgba(255,204,255,.28);
+  color:#f5ecff;
+}
+#btn-play.mode-stop{
+  background:linear-gradient(100deg,rgba(225,58,86,.86),rgba(182,36,78,.88));
+  border:1px solid rgba(255,165,178,.48);
+  color:#fff;
+  box-shadow:0 8px 24px rgba(220,52,82,.35);
+}
+#btn-play.mode-stop:hover:not(:disabled){
+  filter:brightness(1.09);
+  box-shadow:0 10px 28px rgba(235,62,92,.48);
+  transform:translateY(-1px);
+}
+button.ghost{padding:7px 12px;font-size:12px;background:rgba(255,255,255,.05)}
+
+.row{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:16px;
+  padding:12px 0;
+  border-bottom:1px solid rgba(255,255,255,.09);
+}
+.row:first-of-type{padding-top:2px}
+.row:last-child{padding-bottom:0;border-bottom:0}
+.row-label strong{display:block;font-size:13.5px;font-weight:550}
+.row-label small{display:block;font-size:11.5px;color:var(--muted);margin-top:2px}
+
+select,input[type="text"],input[type="password"]{
+  font:inherit;
+  font-size:13px;
+  color:var(--text);
+  background:rgba(16,11,25,.72);
+  border:1px solid rgba(255,255,255,.18);
+  border-radius:10px;
+  padding:8px 12px;
+  outline:none;
+}
+select option{background:#1b1326;color:#f5f2f8}
+select:focus,input:focus{border-color:var(--accent)}
+
+.switch{position:relative;width:38px;height:22px;flex:none;display:inline-block}
+.switch input{opacity:0;width:0;height:0;position:absolute}
+.slider{
+  position:absolute;inset:0;border-radius:999px;
+  background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.20);
+  cursor:pointer;transition:background .18s,border-color .18s;
+}
+.slider:after{
+  content:"";position:absolute;left:3px;top:3px;
+  width:14px;height:14px;border-radius:50%;
+  background:#dfd5eb;transition:transform .18s,background .18s;
+}
+.switch input:checked+.slider{background:#a862f2;border-color:#d8b0ff}
+.switch input:checked+.slider:after{transform:translateX(16px);background:#fff}
+
+.play-foot{
+  margin-top:16px;
+  padding-top:14px;
+  border-top:1px solid rgba(255,255,255,.09);
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  flex-wrap:wrap;
+  font-size:12px;
+  color:var(--muted);
+}
+.msg{min-height:18px}
+.msg.err{color:var(--red)}
+.msg.ok{color:var(--green)}
+.green{color:var(--green)}
+.red{color:var(--red)}
+.amber{color:var(--amber)}
+
+.dev-chips{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:14px}
+.chip{
+  display:flex;align-items:center;justify-content:space-between;gap:8px;
+  padding:9px 11px;border:1px solid rgba(255,255,255,.11);border-radius:10px;
+  background:rgba(255,255,255,.04);font-size:12px;font-weight:550;
+}
+
+/* Diagnostics (Mode dev) */
+.page-head{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;margin-bottom:16px}
+.page-head h1{margin:0;font-size:24px;font-weight:650;letter-spacing:-.6px}
+.page-head p{margin:4px 0 0;color:var(--muted);font-size:12.5px}
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:14px}
+.stat{
+  background:var(--glass-strong);
+  backdrop-filter:blur(16px);
+  border:1px solid var(--line);
+  border-radius:13px;
+  padding:15px 17px;
+}
+.stat span{display:block;font-size:11px;color:var(--muted)}
+.stat strong{display:block;margin-top:5px;font-size:22px;font-weight:650;font-variant-numeric:tabular-nums}
+.two{display:grid;grid-template-columns:1.2fr 1fr;gap:14px}
+.card h2{margin:0 0 12px;font-size:15px;font-weight:600}
+.bar-wrap{margin-bottom:10px}
+.bar-wrap:last-child{margin-bottom:0}
+.bar-lbl{display:flex;justify-content:space-between;font-size:11.5px;color:#d6cbe2;margin-bottom:4px}
+.track{height:5px;background:rgba(255,255,255,.10);border-radius:99px;overflow:hidden}
+.fill{height:100%;background:linear-gradient(90deg,var(--violet),var(--pink));border-radius:99px}
+
+/* Journaux (Mode dev) */
+.toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+.toolbar input[type="text"]{flex:1;min-width:190px}
+.log-box{
+  background:rgba(12,8,18,.90);
+  backdrop-filter:blur(16px);
+  border:1px solid var(--line);
+  border-radius:var(--radius);
+  overflow:hidden;
+}
+.log-head{
+  padding:10px 14px;
+  border-bottom:1px solid rgba(255,255,255,.10);
+  display:flex;justify-content:space-between;align-items:center;
+  font-size:12px;color:var(--muted);
+}
+.log-scroll{
+  height:calc(100vh - 250px);
+  min-height:320px;
+  overflow:auto;
+  font:11.5px/1.55 Consolas,"Cascadia Mono",monospace;
+}
+.log-line{
+  display:grid;grid-template-columns:46px 52px minmax(0,1fr);gap:10px;
+  padding:3px 14px;border-bottom:1px solid rgba(255,255,255,.03);
+}
+.log-line:hover{background:rgba(255,255,255,.04)}
+.log-n{color:#655876;text-align:right;user-select:none}
+.log-lvl{font-weight:650;font-size:10.5px;text-transform:uppercase}
+.log-lvl.error{color:var(--red)}
+.log-lvl.warn{color:var(--amber)}
+.log-lvl.perf{color:var(--green)}
+.log-lvl.info{color:#a8b8ff}
+.log-lvl.other{color:#7c6f8c}
+.log-txt{white-space:pre-wrap;overflow-wrap:anywhere;color:#e5def0}
+.empty{padding:36px;text-align:center;color:var(--muted)}
+
+/* Paramètres */
+.dev-form{margin-top:16px;padding-top:16px;border-top:1px solid rgba(255,255,255,.10)}
+.dev-form[hidden]{display:none}
+.dev-form-row{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
+.dev-form-row input{flex:1;min-width:180px}
+.btn-accent{
+  background:linear-gradient(100deg,var(--violet),var(--pink));
+  border-color:rgba(255,204,255,.35);
+  color:#fff;
+}
+
+@media(max-width:720px){
+  header{padding:0 14px}
+  .brand-mini span{display:none}
+  .stats{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .two,.dev-chips{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+<!-- Intro cinématique VIce Studio -->
+<div id="studio-intro">
+  <div class="intro-glow"></div>
+  <img class="intro-emblem" id="intro-img" src="/art/studio-emblem.png" onerror="this.onerror=null;this.src='/art/vice-logo.svg'" alt="VIce Studio">
+  <div class="intro-bar"></div>
+  <div class="intro-title">VIce STUDIO</div>
+  <div class="intro-skip" data-i18n="intro_skip">Cliquer pour passer</div>
+</div>
+
+<header>
+  <div class="head-left">
+    <div class="brand-mini" id="brand-home">
+      <img src="/art/vice-logo.svg" alt="VIce">
+      <span>STUDIO</span>
+    </div>
+    <nav role="tablist">
+      <button class="tab active" data-view="play" role="tab" data-i18n="nav_play">Jouer</button>
+      <button class="tab dev-only" data-view="diag" role="tab" data-i18n="nav_diag">Diagnostics</button>
+      <button class="tab dev-only" data-view="logs" role="tab" data-i18n="nav_logs">Journaux</button>
+      <button class="tab" data-view="settings" role="tab" data-i18n="nav_settings">Paramètres</button>
+    </nav>
+  </div>
+  <div class="head-right">
+    <div class="lang-toggle" role="group" aria-label="Language">
+      <button class="lang-btn active" data-lang="fr" type="button">FR</button>
+      <button class="lang-btn" data-lang="en" type="button">EN</button>
+    </div>
+    <div class="status-pill"><i class="dot" id="conn-dot"></i><span id="conn-text">Prêt</span></div>
+  </div>
+</header>
+
+<main id="main">
+  <!-- JOUER -->
+  <section id="view-play" class="view active">
+    <div class="hero-logo-wrap">
+      <img class="hero-logo" src="/art/vice-logo.svg" alt="VIce">
+      <div class="hero-sub">VIce Studio · Compatibility Engine</div>
+    </div>
+
+    <div class="card">
+      <button id="btn-play" class="mode-play">▶ Jouer</button>
+
+      <div class="row">
+        <div class="row-label">
+          <strong data-i18n="console_label">Console cible</strong>
+          <small data-i18n="console_hint">Profil de compatibilité (Xbox Series X recommandé)</small>
+        </div>
+        <select id="opt-console">
+          <option value="series-x">Xbox Series X</option>
+          <option value="series-s">Xbox Series S</option>
+        </select>
+      </div>
+
+      <!-- Options développeur uniquement -->
+      <div class="row dev-only">
+        <div class="row-label">
+          <strong data-i18n="version_label">Version du moteur</strong>
+          <small id="meta-build-detail">—</small>
+        </div>
+        <select id="opt-version"><option value="victory.exe">victory.exe</option></select>
+      </div>
+
+      <div class="row">
+        <div class="row-label">
+          <strong data-i18n="rt_label">Ray Tracing (BVH)</strong>
+          <small data-i18n="rt_hint">Éclairage indirect en direct (désactiver pour +FPS)</small>
+        </div>
+        <label class="switch"><input id="opt-rt" type="checkbox" checked><span class="slider"></span></label>
+      </div>
+
+      <div class="row dev-only">
+        <div class="row-label">
+          <strong data-i18n="fast_gpu_label">Accélération GPU RTX</strong>
+          <small data-i18n="fast_gpu_hint">Levels-on-demand, async submit, file COPY, indirect window</small>
+        </div>
+        <label class="switch"><input id="opt-fast" type="checkbox" checked><span class="slider"></span></label>
+      </div>
+
+      <div class="row dev-only">
+        <div class="row-label">
+          <strong data-i18n="dstorage_label">Fix murs DirectStorage</strong>
+          <small data-i18n="dstorage_hint">Notifie le GPU après le streaming des décors</small>
+        </div>
+        <label class="switch"><input id="opt-dstorage" type="checkbox" checked><span class="slider"></span></label>
+      </div>
+
+      <div class="dev-chips dev-only">
+        <div class="chip"><span data-i18n="opt_debug">Debug D3D12</span><label class="switch"><input id="opt-debug" type="checkbox"><span class="slider"></span></label></div>
+        <div class="chip"><span data-i18n="opt_surface">Stats surface</span><label class="switch"><input id="opt-surface" type="checkbox"><span class="slider"></span></label></div>
+        <div class="chip"><span data-i18n="opt_warp">WARP logiciel</span><label class="switch"><input id="opt-warp" type="checkbox"><span class="slider"></span></label></div>
+      </div>
+
+      <div class="play-foot">
+        <span class="msg" id="msg" role="status"></span>
+        <span id="play-summary">—</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- DIAGNOSTICS (Mode dev) -->
+  <section id="view-diag" class="view">
+    <div class="page-head">
+      <div>
+        <h1 data-i18n="nav_diag">Diagnostics</h1>
+        <p id="diag-build">—</p>
+      </div>
+      <button class="ghost" id="btn-go-logs" data-i18n="open_logs">Ouvrir les journaux →</button>
+    </div>
+
+    <div class="stats">
+      <div class="stat"><span data-i18n="stat_fps">FPS</span><strong id="st-fps">—</strong></div>
+      <div class="stat"><span data-i18n="stat_ms">Temps / frame</span><strong id="st-ms">—</strong></div>
+      <div class="stat"><span data-i18n="stat_draws">Draws / frame</span><strong id="st-draws">—</strong></div>
+      <div class="stat"><span data-i18n="stat_exit">État sortie</span><strong id="st-exit">—</strong></div>
+    </div>
+
+    <div class="two">
+      <div class="card solid">
+        <h2 data-i18n="gpu_counters">Compteurs GPU (vs session précédente)</h2>
+        <div id="diag-rows"></div>
+      </div>
+      <div class="card solid">
+        <h2 data-i18n="d3d_messages">Messages Direct3D (top IDs)</h2>
+        <div id="diag-codes"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- JOURNAUX (Mode dev) -->
+  <section id="view-logs" class="view">
+    <div class="toolbar">
+      <input type="text" id="log-q" autocomplete="off">
+      <select id="log-lvl">
+        <option value="all" data-i18n="lvl_all">Tous</option>
+        <option value="perf" data-i18n="lvl_perf">Perf (FPS)</option>
+        <option value="error" data-i18n="lvl_error">Erreurs</option>
+        <option value="warn" data-i18n="lvl_warn">Avertissements</option>
+        <option value="info" data-i18n="lvl_info">Infos</option>
+      </select>
+      <button class="ghost" id="btn-log-refresh" data-i18n="btn_refresh">Actualiser</button>
+      <button class="ghost" id="btn-log-copy" data-i18n="btn_copy">Copier</button>
+      <button class="ghost" id="btn-log-dir" data-i18n="btn_folder">Dossier</button>
+    </div>
+    <div class="log-box">
+      <div class="log-head">
+        <span id="log-meta">play.log</span>
+        <span id="log-count">—</span>
+      </div>
+      <div class="log-scroll" id="log-list"><div class="empty">—</div></div>
+    </div>
+  </section>
+
+  <!-- PARAMÈTRES -->
+  <section id="view-settings" class="view">
+    <div class="page-head">
+      <div>
+        <h1 data-i18n="nav_settings">Paramètres</h1>
+        <p data-i18n="settings_sub">Langue, apparence et accès avancés de VIce Studio.</p>
+      </div>
+    </div>
+    <div class="card solid">
+      <div class="row">
+        <div class="row-label">
+          <strong data-i18n="lang_label">Langue de l’interface</strong>
+          <small data-i18n="lang_hint">Français (principal) ou English (secondaire)</small>
+        </div>
+        <select id="opt-lang">
+          <option value="fr">Français</option>
+          <option value="en">English</option>
+        </select>
+      </div>
+      <div class="row">
+        <div class="row-label">
+          <strong data-i18n="intro_label">Animation d’ouverture</strong>
+          <small data-i18n="intro_hint">Rejouer le logo animé VIce Studio</small>
+        </div>
+        <button class="ghost" id="btn-replay-intro" data-i18n="btn_replay">Rejouer</button>
+      </div>
+      <div class="row">
+        <div class="row-label">
+          <strong data-i18n="dev_label">Mode développeur</strong>
+          <small id="dev-status">—</small>
+        </div>
+        <button id="btn-dev-toggle">Activer</button>
+      </div>
+      <form id="dev-form" class="dev-form" hidden>
+        <label for="dev-pw" style="font-size:12.5px;color:var(--muted)" data-i18n="dev_pw_label">Mot de passe développeur</label>
+        <div class="dev-form-row">
+          <input id="dev-pw" type="password" autocomplete="off" required maxlength="256">
+          <button type="submit" class="btn-accent" data-i18n="btn_unlock">Déverrouiller</button>
+          <button type="button" class="ghost" id="btn-dev-cancel" data-i18n="btn_cancel">Annuler</button>
+        </div>
+        <div class="msg" id="dev-msg" style="margin-top:8px"></div>
+      </form>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+
+const I18N = {
+  fr: {
+    locale: "fr-FR",
+    intro_skip: "Cliquer pour passer",
+    nav_play: "Jouer",
+    nav_diag: "Diagnostics",
+    nav_logs: "Journaux",
+    nav_settings: "Paramètres",
+    console_label: "Console cible",
+    console_hint: "Profil de compatibilité (Xbox Series X recommandé)",
+    rt_label: "Ray Tracing (BVH)",
+    rt_hint: "Éclairage indirect en direct (désactiver pour +FPS)",
+    version_label: "Version du moteur",
+    fast_gpu_label: "Accélération GPU RTX",
+    fast_gpu_hint: "Levels-on-demand, async submit, file COPY, indirect window",
+    dstorage_label: "Fix murs DirectStorage",
+    dstorage_hint: "Notifie le GPU après le streaming des décors",
+    opt_debug: "Debug D3D12",
+    opt_surface: "Stats surface",
+    opt_warp: "WARP logiciel",
+    open_logs: "Ouvrir les journaux →",
+    stat_fps: "FPS",
+    stat_ms: "Temps / frame",
+    stat_draws: "Draws / frame",
+    stat_exit: "État sortie",
+    gpu_counters: "Compteurs GPU (vs session précédente)",
+    d3d_messages: "Messages Direct3D (top IDs)",
+    lvl_all: "Tous",
+    lvl_perf: "Perf (FPS)",
+    lvl_error: "Erreurs",
+    lvl_warn: "Avertissements",
+    lvl_info: "Infos",
+    btn_refresh: "Actualiser",
+    btn_copy: "Copier",
+    btn_folder: "Dossier",
+    settings_sub: "Langue, apparence et accès avancés de VIce Studio.",
+    lang_label: "Langue de l’interface",
+    lang_hint: "Français (principal) ou English (secondaire)",
+    intro_label: "Animation d’ouverture",
+    intro_hint: "Rejouer le logo animé VIce Studio",
+    btn_replay: "Rejouer",
+    dev_label: "Mode développeur",
+    dev_pw_label: "Mot de passe développeur",
+    dev_pw_placeholder: "Saisir le mot de passe",
+    btn_unlock: "Déverrouiller",
+    btn_cancel: "Annuler",
+    btn_enable: "Activer",
+    btn_disable: "Désactiver",
+    dev_on: "Activé — outils techniques déverrouillés",
+    dev_off: "Désactivé — protégé par mot de passe",
+    log_placeholder: "Filtrer (fps, erreur, shader, pipeline…)",
+    btn_play: "▶ Jouer",
+    btn_stop: "■ Arrêter le jeu",
+    btn_starting: "■ Arrêter (ouverture de la fenêtre…)",
+    btn_launching: "Lancement…",
+    btn_closing: "Fermeture du jeu…",
+    msg_ready: "Prêt à lancer.",
+    msg_launching: "Lancement du jeu…",
+    msg_opening: "Ouverture de la fenêtre du jeu…",
+    msg_window_active: "Fenêtre du jeu active.",
+    msg_window_closed: "Fenêtre fermée — prêt à relancer.",
+    msg_closing: "Fermeture propre de la fenêtre du jeu…",
+    msg_stopped: "Jeu arrêté.",
+    msg_err_launch: "Impossible de lancer le jeu.",
+    msg_err_stop: "Impossible d'arrêter le jeu.",
+    msg_verifying: "Vérification…",
+    msg_bad_pw: "Mot de passe incorrect.",
+    msg_timeout: "Serveur local momentanément occupé.",
+    conn_ready: "Local · Prêt",
+    conn_dev: "Local · Dev",
+    conn_in_game: "En jeu",
+    conn_window_open: "Fenêtre ouverte",
+    conn_starting: "Démarrage…",
+    conn_reconnecting: "Reconnexion…",
+    conn_stopped: "Serveur arrêté",
+    summary_last: "Dernière session",
+    summary_normal: "Arrêt normal",
+    summary_code: "Code",
+    summary_ready: "Prêt",
+    summary_opening: "Ouverture de la fenêtre…",
+    build_current: "Build actuel",
+    build_none: "Aucun exécutable",
+    build_local_none: "Aucun build détecté",
+    build_local_prefix: "Build local",
+    unit_mb: "Mo",
+    state_open: "Ouvert",
+    state_starting: "Démarrage",
+    cnt_validation: "Messages D3D12",
+    cnt_unsupported: "Opérations non supportées",
+    cnt_rejected: "Pipelines rejetés",
+    cnt_slow: "Soumissions lentes",
+    cnt_fatal: "Erreurs GPU fatales",
+    no_d3d_msgs: "Aucun message Direct3D enregistré.",
+    log_empty: "Aucune ligne correspondante.",
+    log_copied: "play.log · copié !",
+    log_lines: (a, b, c) => `${a} / ${b} lignes (sur ${c})`,
+  },
+  en: {
+    locale: "en-US",
+    intro_skip: "Click to skip",
+    nav_play: "Play",
+    nav_diag: "Diagnostics",
+    nav_logs: "Logs",
+    nav_settings: "Settings",
+    console_label: "Target console",
+    console_hint: "Compatibility profile (Xbox Series X recommended)",
+    rt_label: "Ray Tracing (BVH)",
+    rt_hint: "Live indirect lighting (disable for higher FPS)",
+    version_label: "Engine build",
+    fast_gpu_label: "RTX GPU Acceleration",
+    fast_gpu_hint: "Levels-on-demand, async submit, COPY queue, indirect window",
+    dstorage_label: "DirectStorage Wall Fix",
+    dstorage_hint: "Notifies the GPU after physical-page streaming",
+    opt_debug: "D3D12 Debug",
+    opt_surface: "Surface Stats",
+    opt_warp: "Software WARP",
+    open_logs: "Open logs →",
+    stat_fps: "FPS",
+    stat_ms: "Frame time",
+    stat_draws: "Draws / frame",
+    stat_exit: "Exit state",
+    gpu_counters: "GPU Counters (vs previous session)",
+    d3d_messages: "Direct3D Messages (top IDs)",
+    lvl_all: "All",
+    lvl_perf: "Perf (FPS)",
+    lvl_error: "Errors",
+    lvl_warn: "Warnings",
+    lvl_info: "Info",
+    btn_refresh: "Refresh",
+    btn_copy: "Copy",
+    btn_folder: "Folder",
+    settings_sub: "Language, appearance, and advanced VIce Studio access.",
+    lang_label: "Interface language",
+    lang_hint: "Français (primary) or English (secondary)",
+    intro_label: "Startup animation",
+    intro_hint: "Replay the animated VIce Studio emblem",
+    btn_replay: "Replay",
+    dev_label: "Developer mode",
+    dev_pw_label: "Developer password",
+    dev_pw_placeholder: "Enter password",
+    btn_unlock: "Unlock",
+    btn_cancel: "Cancel",
+    btn_enable: "Enable",
+    btn_disable: "Disable",
+    dev_on: "Enabled — technical tools unlocked",
+    dev_off: "Disabled — password protected",
+    log_placeholder: "Filter (fps, error, shader, pipeline…)",
+    btn_play: "▶ Play",
+    btn_stop: "■ Stop game",
+    btn_starting: "■ Stop (opening window…)",
+    btn_launching: "Launching…",
+    btn_closing: "Closing game…",
+    msg_ready: "Ready to launch.",
+    msg_launching: "Launching game…",
+    msg_opening: "Opening game window…",
+    msg_window_active: "Game window active.",
+    msg_window_closed: "Window closed — ready to launch.",
+    msg_closing: "Closing game window cleanly…",
+    msg_stopped: "Game stopped.",
+    msg_err_launch: "Unable to launch game.",
+    msg_err_stop: "Unable to stop game.",
+    msg_verifying: "Verifying…",
+    msg_bad_pw: "Incorrect password.",
+    msg_timeout: "Local server is temporarily busy.",
+    conn_ready: "Local · Ready",
+    conn_dev: "Local · Dev",
+    conn_in_game: "In game",
+    conn_window_open: "Window open",
+    conn_starting: "Starting…",
+    conn_reconnecting: "Reconnecting…",
+    conn_stopped: "Server stopped",
+    summary_last: "Last session",
+    summary_normal: "Clean exit",
+    summary_code: "Code",
+    summary_ready: "Ready",
+    summary_opening: "Opening window…",
+    build_current: "Current build",
+    build_none: "No executable",
+    build_local_none: "No build detected",
+    build_local_prefix: "Local build",
+    unit_mb: "MB",
+    state_open: "Open",
+    state_starting: "Starting",
+    cnt_validation: "D3D12 messages",
+    cnt_unsupported: "Unsupported operations",
+    cnt_rejected: "Rejected pipelines",
+    cnt_slow: "Slow submissions",
+    cnt_fatal: "Fatal GPU errors",
+    no_d3d_msgs: "No Direct3D messages recorded.",
+    log_empty: "No matching lines.",
+    log_copied: "play.log · copied!",
+    log_lines: (a, b, c) => `${a} / ${b} lines (of ${c})`,
+  },
+};
+
+let lang = "fr";
+const t = key => (I18N[lang] && I18N[lang][key]) || I18N.fr[key] || key;
+
+let token = "__STUDIO_SESSION_TOKEN__";
+let state = null;
+let developer = false;
+let currentView = "play";
+let lastLogEntries = [];
+let failCount = 0;
+let pollTimer = null;
+let actionBusy = false;
+let msgKey = "msg_ready";
+
+const PREF_KEY = "vice_studio_prefs_v4";
+function loadPrefs() {
+  try {
+    const p = JSON.parse(localStorage.getItem(PREF_KEY) || "{}");
+    if (p.lang === "fr" || p.lang === "en") lang = p.lang;
+    if (p.console) $("opt-console").value = p.console;
+    if (typeof p.bvhBuilder === "boolean") $("opt-rt").checked = p.bvhBuilder;
+    if (typeof p.fastGpu === "boolean") $("opt-fast").checked = p.fastGpu;
+    if (typeof p.dstorageNotify === "boolean") $("opt-dstorage").checked = p.dstorageNotify;
+  } catch {}
+}
+function savePrefs() {
+  try {
+    localStorage.setItem(PREF_KEY, JSON.stringify({
+      lang,
+      console: $("opt-console").value,
+      bvhBuilder: $("opt-rt").checked,
+      fastGpu: $("opt-fast").checked,
+      dstorageNotify: $("opt-dstorage").checked,
+    }));
+  } catch {}
+}
+
+function applyLanguage(newLang) {
+  lang = newLang === "en" ? "en" : "fr";
+  document.documentElement.lang = lang;
+  $("opt-lang").value = lang;
+  document.querySelectorAll(".lang-btn").forEach(b => b.classList.toggle("active", b.dataset.lang === lang));
+  document.querySelectorAll("[data-i18n]").forEach(el => {
+    const k = el.dataset.i18n;
+    if (typeof t(k) === "string") el.textContent = t(k);
+  });
+  $("studio-intro").title = t("intro_skip");
+  $("log-q").placeholder = t("log_placeholder");
+  $("dev-pw").placeholder = t("dev_pw_placeholder");
+  if (msgKey) setMsgKey(msgKey, $("msg").dataset.cls || "");
+  savePrefs();
+  if (state) {
+    // Force rebuild of build labels with localized dates
+    $("opt-version").dataset.sig = "";
+    renderState();
+    if (currentView === "logs" && developer) refreshLogs();
+  }
+}
+
+document.querySelectorAll(".lang-btn").forEach(b => b.onclick = () => applyLanguage(b.dataset.lang));
+$("opt-lang").onchange = () => applyLanguage($("opt-lang").value);
+["opt-console","opt-rt","opt-fast","opt-dstorage"].forEach(id => $(id).addEventListener("change", savePrefs));
+loadPrefs();
+
+// Intro cinématique d'ouverture
+let introTimer = null;
+function playIntro(force = false) {
+  const el = $("studio-intro");
+  if (!force && sessionStorage.getItem("vice_intro_seen") === "1") {
+    el.classList.add("done");
+    return;
+  }
+  sessionStorage.setItem("vice_intro_seen", "1");
+  el.classList.remove("done");
+  if (force) {
+    el.querySelectorAll(".intro-glow,.intro-emblem,.intro-bar,.intro-title").forEach(n => {
+      n.style.animation = "none";
+      void n.offsetWidth;
+      n.style.animation = "";
+    });
+  }
+  clearTimeout(introTimer);
+  introTimer = setTimeout(() => el.classList.add("done"), 2150);
+}
+function skipIntro() {
+  clearTimeout(introTimer);
+  $("studio-intro").classList.add("done");
+}
+$("studio-intro").onclick = skipIntro;
+document.addEventListener("keydown", e => {
+  if ((e.key === "Escape" || e.key === " ") && !$("studio-intro").classList.contains("done")) {
+    e.preventDefault();
+    skipIntro();
+  }
+});
+playIntro(false);
+$("btn-replay-intro").onclick = () => playIntro(true);
+
+// API fiable : auto-reconnexion token sur 401 + timeout propre
+async function api(path, opts = {}, retry = true) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 5000);
+  try {
+    const headers = Object.assign({ "X-Studio-Key": token }, opts.headers || {});
+    const res = await fetch(path, Object.assign({}, opts, { headers, signal: ctrl.signal, cache: "no-store" }));
+    if (res.status === 401 && retry) {
+      const tr = await fetch("/api/token", { cache: "no-store" });
+      if (tr.ok) {
+        const td = await tr.json();
+        if (td.token) {
+          token = td.token;
+          return api(path, opts, false);
+        }
+      }
+    }
+    const text = await res.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch {}
+    if (!res.ok) throw new Error((data && data.error) || ("HTTP " + res.status));
+    return data;
+  } catch (err) {
+    if (err.name === "AbortError") throw new Error(t("msg_timeout"));
+    if (err instanceof TypeError) throw new Error(t("conn_stopped"));
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function fmtDate(iso) {
+  if (!iso) return "—";
+  try { return new Date(iso).toLocaleString(t("locale"), { dateStyle: "short", timeStyle: "short" }); }
+  catch { return iso; }
+}
+function fmtNum(n) {
+  return n == null ? "—" : Number(n).toLocaleString(t("locale"));
+}
+function setMsg(text, cls = "") {
+  msgKey = null;
+  const el = $("msg");
+  el.textContent = text || "";
+  el.dataset.cls = cls;
+  el.className = "msg" + (cls ? " " + cls : "");
+}
+function setMsgKey(key, cls = "") {
+  msgKey = key;
+  const el = $("msg");
+  el.textContent = t(key);
+  el.dataset.cls = cls;
+  el.className = "msg" + (cls ? " " + cls : "");
+}
+function setConn(mode, text) {
+  $("conn-dot").className = "dot" + (mode ? " " + mode : "");
+  $("conn-text").textContent = text;
+}
+
+function openView(v) {
+  if (!developer && (v === "diag" || v === "logs")) v = "play";
+  currentView = v;
+  document.querySelectorAll(".tab").forEach(b => b.classList.toggle("active", b.dataset.view === v));
+  document.querySelectorAll(".view").forEach(s => s.classList.toggle("active", s.id === "view-" + v));
+  $("main").classList.toggle("wide", v === "diag" || v === "logs");
+  if (v === "logs") refreshLogs();
+}
+
+function applyDev(on) {
+  developer = Boolean(on);
+  document.body.classList.toggle("developer", developer);
+  $("dev-status").textContent = developer ? t("dev_on") : t("dev_off");
+  $("dev-status").className = developer ? "green" : "";
+  $("btn-dev-toggle").textContent = developer ? t("btn_disable") : t("btn_enable");
+  if (!developer) {
+    ["opt-debug","opt-surface","opt-warp"].forEach(id => $(id).checked = false);
+    if (currentView === "diag" || currentView === "logs") openView("play");
+  }
+}
+
+function renderPlayButton(activeBuild) {
+  const btn = $("btn-play");
+  const isOpen = Boolean(state && (state.windowOpen || state.running));
+  const winOpen = Boolean(state && state.windowOpen);
+  if (actionBusy) { btn.disabled = true; return; }
+  if (winOpen) {
+    btn.className = "mode-stop";
+    btn.textContent = t("btn_stop");
+    btn.disabled = false;
+  } else if (isOpen) {
+    btn.className = "mode-starting";
+    btn.textContent = t("btn_starting");
+    btn.disabled = false;
+  } else {
+    btn.className = "mode-play";
+    btn.textContent = t("btn_play");
+    btn.disabled = !activeBuild || !state || !state.title;
+  }
+}
+
+function renderState() {
+  if (!state) return;
+  applyDev(state.developer);
+  const cur = state.current || {};
+  const prev = state.previous || {};
+  const versions = state.versions || [];
+  const primary = versions[0];
+
+  const sel = $("opt-version");
+  const keep = sel.value;
+  const sig = lang + "|" + versions.map(v => v.name).join("|");
+  if (sel.dataset.sig !== sig) {
+    sel.dataset.sig = sig;
+    sel.replaceChildren();
+    versions.forEach((v, i) => {
+      const opt = document.createElement("option");
+      opt.value = v.name;
+      opt.textContent = i === 0 ? `${t("build_current")} · ${fmtDate(v.date)}` : v.name;
+      sel.append(opt);
+    });
+    if (versions.some(v => v.name === keep)) sel.value = keep;
+  }
+  const activeBuild = versions.find(v => v.name === sel.value) || primary;
+  $("meta-build-detail").textContent = activeBuild
+    ? `${activeBuild.name} · ${(activeBuild.size / 1048576).toFixed(1)} ${t("unit_mb")} · ${fmtDate(activeBuild.date)}`
+    : t("build_none");
+  $("diag-build").textContent = activeBuild
+    ? `${t("build_local_prefix")}: ${activeBuild.name} (${(activeBuild.size / 1048576).toFixed(1)} ${t("unit_mb")}) · ${fmtDate(activeBuild.date)}`
+    : t("build_local_none");
+
+  renderPlayButton(activeBuild);
+
+  if (state.windowOpen) {
+    const liveInfo = cur.fps != null ? `${cur.fps.toFixed(1)} fps · ${cur.ms.toFixed(0)} ms` : t("conn_window_open");
+    $("play-summary").textContent = `${t("conn_in_game")} · ${liveInfo}`;
+    $("play-summary").className = "green";
+    setConn("live", cur.fps != null ? `${t("conn_in_game")} · ${cur.fps.toFixed(1)} fps` : t("conn_window_open"));
+    if (!actionBusy) setMsgKey("msg_window_active", "ok");
+  } else if (state.running) {
+    $("play-summary").textContent = t("summary_opening");
+    $("play-summary").className = "amber";
+    setConn("warn", t("conn_starting"));
+  } else {
+    const exTxt = cur.exit === "0" ? t("summary_normal") : cur.exit != null ? `${t("summary_code")} ${cur.exit}` : t("summary_ready");
+    const fpsTxt = cur.fps != null ? ` · ${cur.fps.toFixed(1)} fps` : "";
+    $("play-summary").textContent = `${t("summary_last")}: ${exTxt}${fpsTxt}`;
+    $("play-summary").className = cur.exit === "0" ? "green" : cur.exit != null ? "red" : "";
+    setConn("", developer ? t("conn_dev") : t("conn_ready"));
+    if (!actionBusy && msgKey === "msg_window_active") setMsgKey("msg_window_closed");
+  }
+
+  if (developer) {
+    $("st-fps").textContent = cur.fps != null ? cur.fps.toFixed(1) : "—";
+    $("st-ms").textContent = cur.ms != null ? `${cur.ms.toFixed(0)} ms` : "—";
+    $("st-draws").textContent = fmtNum(cur.draws);
+    const ex = $("st-exit");
+    ex.textContent = state.windowOpen ? t("state_open") : state.running ? t("state_starting") : cur.exit === "0" ? "OK (0)" : cur.exit != null ? `${t("summary_code")} ${cur.exit}` : "—";
+    ex.className = (state.windowOpen || cur.exit === "0") ? "green" : state.running ? "amber" : cur.exit != null ? "red" : "";
+
+    const rows = $("diag-rows");
+    rows.replaceChildren();
+    for (const [k, i18nKey] of [
+      ["validation","cnt_validation"],
+      ["unsupported","cnt_unsupported"],
+      ["rejected","cnt_rejected"],
+      ["slow","cnt_slow"],
+      ["fatal","cnt_fatal"],
+    ]) {
+      const n = (cur.counts && cur.counts[k]) || 0;
+      const d = n - ((prev.counts && prev.counts[k]) || 0);
+      const r = document.createElement("div"); r.className = "row";
+      const s = document.createElement("span"); s.textContent = t(i18nKey);
+      const right = document.createElement("div"); right.style.cssText = "display:flex;gap:10px;align-items:center";
+      if (prev.meta && cur.meta) {
+        const dl = document.createElement("span");
+        dl.style.fontSize = "11.5px";
+        dl.className = d < 0 ? "green" : d > 0 ? "amber" : "";
+        dl.textContent = (d > 0 ? "+" : "") + d;
+        right.append(dl);
+      }
+      const b = document.createElement("strong");
+      b.textContent = cur.meta ? fmtNum(n) : "—";
+      if (k === "fatal" && n > 0) b.className = "red";
+      right.append(b);
+      r.append(s, right);
+      rows.append(r);
+    }
+
+    const codesEl = $("diag-codes");
+    codesEl.replaceChildren();
+    const codes = Object.entries(cur.codes || {}).sort((a,b) => b[1] - a[1]).slice(0, 6);
+    if (!codes.length) {
+      const e = document.createElement("div");
+      e.style.color = "var(--muted)"; e.style.fontSize = "12px";
+      e.textContent = t("no_d3d_msgs");
+      codesEl.append(e);
+    } else {
+      for (const [id, n] of codes) {
+        const w = document.createElement("div"); w.className = "bar-wrap";
+        const l = document.createElement("div"); l.className = "bar-lbl";
+        l.innerHTML = `<span>ID ${id}</span><strong>${fmtNum(n)}</strong>`;
+        const tr = document.createElement("div"); tr.className = "track";
+        const fl = document.createElement("div"); fl.className = "fill";
+        fl.style.width = (n / codes[0][1] * 100) + "%";
+        tr.append(fl); w.append(l, tr); codesEl.append(w);
+      }
+    }
+  }
+}
+
+async function pollState() {
+  try {
+    state = await api("/api/state");
+    failCount = 0;
+    renderState();
+    if (currentView === "logs" && developer) await refreshLogs();
+  } catch {
+    failCount++;
+    setConn(failCount >= 3 ? "off" : "warn", failCount >= 3 ? t("conn_stopped") : t("conn_reconnecting"));
+  } finally {
+    const delay = failCount > 0
+      ? Math.min(8000, 1000 * failCount)
+      : (state && (state.running || state.windowOpen) ? 1000 : 2500);
+    clearTimeout(pollTimer);
+    pollTimer = setTimeout(pollState, delay);
+  }
+}
+
+async function refreshLogs() {
+  if (!developer) return;
+  const q = encodeURIComponent($("log-q").value);
+  const lvl = encodeURIComponent($("log-lvl").value);
+  try {
+    const data = await api(`/api/logs?q=${q}&level=${lvl}&limit=350`);
+    lastLogEntries = data.entries || [];
+    $("log-count").textContent = t("log_lines")(lastLogEntries.length, data.matched, data.total);
+    const list = $("log-list");
+    if (!lastLogEntries.length) {
+      list.innerHTML = `<div class="empty">${t("log_empty")}</div>`;
+      return;
+    }
+    const atBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 40;
+    const frag = document.createDocumentFragment();
+    for (const e of lastLogEntries) {
+      const row = document.createElement("div"); row.className = "log-line";
+      const n = document.createElement("span"); n.className = "log-n"; n.textContent = e.n;
+      const l = document.createElement("span"); l.className = "log-lvl " + e.lvl; l.textContent = e.lvl;
+      const txt = document.createElement("span"); txt.className = "log-txt"; txt.textContent = e.text;
+      row.append(n, l, txt);
+      frag.append(row);
+    }
+    list.replaceChildren(frag);
+    if (atBottom) list.scrollTop = list.scrollHeight;
+  } catch (err) {
+    $("log-count").textContent = err.message;
+  }
+}
+
+document.querySelectorAll(".tab").forEach(btn => btn.onclick = () => openView(btn.dataset.view));
+$("brand-home").onclick = () => openView("play");
+$("btn-go-logs").onclick = () => openView("logs");
+
+$("btn-play").onclick = async () => {
+  if (actionBusy) return;
+  const shouldStop = Boolean(state && (state.windowOpen || state.running));
+  actionBusy = true;
+  $("btn-play").disabled = true;
+  if (shouldStop) {
+    $("btn-play").textContent = t("btn_closing");
+    setMsgKey("msg_closing");
+    try {
+      await api("/api/stop", { method: "POST" });
+      setMsgKey("msg_stopped");
+    } catch (err) {
+      setMsg(err.message || t("msg_err_stop"), "err");
+    } finally {
+      actionBusy = false;
+      renderState();
+      await pollState();
+    }
+  } else {
+    $("btn-play").className = "mode-starting";
+    $("btn-play").textContent = t("btn_launching");
+    setMsgKey("msg_launching");
+    try {
+      await api("/api/launch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          version: $("opt-version").value,
+          console: $("opt-console").value,
+          bvhBuilder: $("opt-rt").checked,
+          fastGpu: $("opt-fast").checked,
+          dstorageNotify: $("opt-dstorage").checked,
+          debug: developer && $("opt-debug").checked,
+          surface: developer && $("opt-surface").checked,
+          warp: developer && $("opt-warp").checked,
+        }),
+      });
+      setMsgKey("msg_opening", "ok");
+    } catch (err) {
+      setMsg(err.message || t("msg_err_launch"), "err");
+    } finally {
+      actionBusy = false;
+      renderState();
+      await pollState();
+    }
+  }
+};
+
+$("btn-dev-toggle").onclick = async () => {
+  $("dev-msg").textContent = "";
+  if (developer) {
+    try {
+      await api("/api/developer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: false }),
+      });
+      await pollState();
+    } catch (err) {
+      $("dev-msg").textContent = err.message;
+      $("dev-msg").className = "msg err";
+    }
+  } else {
+    $("dev-form").hidden = false;
+    $("dev-pw").focus();
+  }
+};
+$("btn-dev-cancel").onclick = () => {
+  $("dev-form").hidden = true;
+  $("dev-pw").value = "";
+  $("dev-msg").textContent = "";
+};
+$("dev-form").onsubmit = async e => {
+  e.preventDefault();
+  const pw = $("dev-pw").value;
+  $("dev-pw").value = "";
+  $("dev-msg").textContent = t("msg_verifying");
+  $("dev-msg").className = "msg";
+  try {
+    await api("/api/developer", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: true, password: pw }),
+    });
+    $("dev-form").hidden = true;
+    $("dev-msg").textContent = "";
+    await pollState();
+  } catch (err) {
+    $("dev-msg").textContent = err.message || t("msg_bad_pw");
+    $("dev-msg").className = "msg err";
+  }
+};
+
+let logDebounce = null;
+$("log-q").oninput = () => { clearTimeout(logDebounce); logDebounce = setTimeout(refreshLogs, 150); };
+$("log-lvl").onchange = refreshLogs;
+$("btn-log-refresh").onclick = refreshLogs;
+$("btn-log-copy").onclick = async () => {
+  if (!lastLogEntries.length) return;
+  try {
+    await navigator.clipboard.writeText(lastLogEntries.map(e => e.text).join("\n"));
+    $("log-meta").textContent = t("log_copied");
+    setTimeout(() => $("log-meta").textContent = "play.log", 1500);
+  } catch {}
+};
+$("btn-log-dir").onclick = () => api("/api/open-log-dir", { method: "POST" }).catch(() => {});
+
+applyLanguage(lang);
+pollState();
+</script>
+</body>
+</html>

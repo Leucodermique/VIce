@@ -1434,9 +1434,16 @@ impl HostHeap {
     /// (any more): a host slot made from it becomes null again, so that
     /// the host copy can be let go (`crate::resource::let_go_idle`; a slot
     /// keeps what it views). True if the slot was made.
-    pub(crate) fn texture_slot_gone(&self, index: u32) -> bool {
+    pub(crate) fn texture_slot_gone(&self, index: u32, write: u64) -> bool {
         let mut made = self.made.lock().unwrap_or_else(|e| e.into_inner());
         if made.get(index as usize).is_none_or(|&key| key == 0) {
+            return false;
+        }
+        // Mapping was checked outside these locks. A newer descriptor may
+        // have been mirrored, or a table read may have removed the entry.
+        // Mirror takes the made lock before updating the texture queue.
+        let mut textures = self.textures.lock().unwrap_or_else(|e| e.into_inner());
+        if textures.same(index, write).is_none() {
             return false;
         }
         self.unmake(&mut made, index);
@@ -2130,6 +2137,27 @@ fn uav_desc(words: &[u32; 10]) -> D3D12_UNORDERED_ACCESS_VIEW_DESC {
     }
 }
 
+/// The format the host makes a typed buffer view in. Translated shaders
+/// declare every typed buffer load and store as 32-bit float
+/// (`victory_shader` `emit/lower.rs`), and a view in a 32-bit integer format
+/// converts between float and integer values on the way: a store of an
+/// integer's bits as a float is written as the integer the float rounds to
+/// (zero for most of them), where the console moves the bits. The float
+/// format of the same width moves them unchanged, and matches what the
+/// shader declares. (The meshlet culling programs append packed meshlet
+/// numbers to an `R32_UINT` list this way.)
+fn bit_exact_format(format: DXGI_FORMAT) -> DXGI_FORMAT {
+    match format {
+        DXGI_FORMAT_R32G32B32A32_UINT | DXGI_FORMAT_R32G32B32A32_SINT => {
+            DXGI_FORMAT_R32G32B32A32_FLOAT
+        }
+        DXGI_FORMAT_R32G32B32_UINT | DXGI_FORMAT_R32G32B32_SINT => DXGI_FORMAT_R32G32B32_FLOAT,
+        DXGI_FORMAT_R32G32_UINT | DXGI_FORMAT_R32G32_SINT => DXGI_FORMAT_R32G32_FLOAT,
+        DXGI_FORMAT_R32_UINT | DXGI_FORMAT_R32_SINT => DXGI_FORMAT_R32_FLOAT,
+        other => other,
+    }
+}
+
 /// A buffer view of title memory at `address` on its host copy: the first
 /// element moves by the copy's offset.
 /// Bytes per element of a buffer view.
@@ -2486,6 +2514,7 @@ fn buffer_srv(
             Flags: D3D12_BUFFER_SRV_FLAG_RAW,
         };
     }
+    desc.Format = bit_exact_format(desc.Format);
     let element = element_size(&desc);
     // SAFETY: a buffer view's union member.
     let buffer = unsafe { &mut desc.Anonymous.Buffer };
@@ -2600,6 +2629,7 @@ fn buffer_uav(
     buffer.CounterOffsetInBytes = 0;
     let (first, count, stride) = (buffer.FirstElement, buffer.NumElements, buffer.StructureByteStride);
     let raw = buffer.Flags.0 & D3D12_BUFFER_UAV_FLAG_RAW.0 != 0;
+    desc.Format = bit_exact_format(desc.Format);
     if window.is_some() {
         // (Left out at first: every structured unordered access view was then
         // refused by `buffer_view_ok` and left null, runs 15 and 16.)
@@ -3171,6 +3201,35 @@ fn null_view(at: D3D12_CPU_DESCRIPTOR_HANDLE) {
 mod tests {
     use super::*;
 
+    /// Typed buffer views of 32-bit integer formats are made in the float
+    /// format of the same width (the shaders' float loads and stores then
+    /// move the bits); every other format is the title's.
+    #[test]
+    fn typed_buffer_views_of_32_bit_integers_move_bits() {
+        for (title, host) in [
+            (DXGI_FORMAT_R32_UINT, DXGI_FORMAT_R32_FLOAT),
+            (DXGI_FORMAT_R32_SINT, DXGI_FORMAT_R32_FLOAT),
+            (DXGI_FORMAT_R32G32_UINT, DXGI_FORMAT_R32G32_FLOAT),
+            (DXGI_FORMAT_R32G32B32_SINT, DXGI_FORMAT_R32G32B32_FLOAT),
+            (DXGI_FORMAT_R32G32B32A32_UINT, DXGI_FORMAT_R32G32B32A32_FLOAT),
+        ] {
+            assert_eq!(bit_exact_format(title), host);
+            assert_eq!(
+                crate::resource::element(title.0 as u32),
+                crate::resource::element(host.0 as u32)
+            );
+        }
+        for kept in [
+            DXGI_FORMAT_R32_FLOAT,
+            DXGI_FORMAT_R32_TYPELESS,
+            DXGI_FORMAT_UNKNOWN,
+            DXGI_FORMAT_R16G16_UINT,
+            DXGI_FORMAT_R8G8B8A8_UNORM,
+        ] {
+            assert_eq!(bit_exact_format(kept), kept);
+        }
+    }
+
     /// A null texture UAV keeps the title's dimension (3D for the world's
     /// wind field), and is 2D when the title names none.
     #[test]
@@ -3559,6 +3618,44 @@ mod tests {
         spans.forget(4);
         spans.forget(7);
         assert!(spans.by_start.is_empty() && spans.by_slot.is_empty());
+    }
+
+    #[test]
+    fn an_old_unmapped_observation_preserves_a_replacement_view() {
+        let Some(heap) = HostHeap::new(false, 8) else { return };
+        let slot = 1;
+        heap.queue_texture(slot, true, false, 10);
+        let (_, observed) = heap.texture_slots_due(10, 1).0[0];
+
+        // The replacement is a 64 x 64 BC7 texture with synthetic backing.
+        static BYTES: [u8; 65536] = [0; 65536];
+        let address = BYTES.as_ptr() as u64;
+        let resource = [3, 0, 0, 0, 64, 0, 64, 0x1_0001, 98, 1, 0, 0x105, 0, 0];
+        let mut srv = [0; 16];
+        srv[..6].copy_from_slice(&[98, 4, 5768, 0, 0, 1]);
+        (srv[10], srv[11]) = (address as u32, (address >> 32) as u32);
+        let view = View::Placed(false, resource, srv);
+        let [entry, generation] = super::super::words_for(view.clone());
+        let title = [super::super::VIEW_TAG, entry, generation];
+        let handle = title.as_ptr() as u64;
+        assert_eq!(heap.mirror(slot, handle, false), Some(view.clone()));
+        let (_, replacement) = heap.texture_slots_due(u64::MAX, 1).0[0];
+        assert_ne!(observed, replacement);
+        assert_eq!(heap.mirror(slot, handle, true), Some(view));
+        assert_eq!(super::device_removed(), None);
+        let key = u64::from(generation) << 32 | u64::from(entry);
+        assert!(heap.kept.lock().unwrap()[slot as usize].is_some());
+        assert!(!heap.texture_slot_gone(slot, observed));
+        assert_eq!(heap.made.lock().unwrap()[slot as usize], key);
+        assert_eq!(heap.texture_slots_due(u64::MAX, 1).0, [(slot, replacement)]);
+        // A completed write is no longer queued for refresh.
+        heap.texture_slot_done(slot, replacement, None);
+        assert!(!heap.texture_slot_gone(slot, replacement));
+        assert_eq!(heap.made.lock().unwrap()[slot as usize], key);
+        heap.queue_texture(slot, true, false, 12);
+        let (_, current) = heap.texture_slots_due(u64::MAX, 1).0[0];
+        assert!(heap.texture_slot_gone(slot, current));
+        assert_eq!(heap.made.lock().unwrap()[slot as usize], 0);
     }
 
     /// Memory the runtime maps under a slot's texture makes the slot due
