@@ -522,9 +522,9 @@ fn record_clamp_as(
     #[cfg(feature = "diagnostics")]
     crate::copystat::add(crate::copystat::C::IndirectBounded, 1);
     #[cfg(feature = "diagnostics")]
-    let waits = crate::copystat::barrier_test() & 2 == 0;
+    let waits = crate::copystat::barrier_test() & 2 == 0 && clamp_waits();
     #[cfg(not(feature = "diagnostics"))]
-    let waits = true;
+    let waits = clamp_waits();
     let first = [
         uav_barrier(),
         transition(dst, before, D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
@@ -742,6 +742,14 @@ pub(crate) fn record_gathers(l: &ID3D12GraphicsCommandList, sets: &[GatherSet], 
         l.ResourceBarrier(&[transition(budget, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON)]);
     }
     all
+}
+
+/// Whether each clamp waits for every earlier shader write before it and
+/// after it (`VICTORY_CLAMP_WAITS=0` leaves those two global waits out; on
+/// by default). The scratch buffer's own state changes stay.
+fn clamp_waits() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_CLAMP_WAITS").is_none_or(|v| v != "0"))
 }
 
 /// Whether every draw served from a window is checked against a fresh

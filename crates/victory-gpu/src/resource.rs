@@ -1293,7 +1293,7 @@ pub(crate) fn drop_levels(desc: &ResourceDesc) -> u32 {
             .unwrap_or(0)
             .min(4)
     });
-    if n == 0 || !fills(desc) || desc.dimension != TEXTURE_2D || desc.sample_count > 1 {
+    if n == 0 || !fills(desc) || desc.dimension != TEXTURE_2D || desc.sample_count > 1 || desc.mip_levels < 5 {
         return 0;
     }
     let n = n.min(u32::from(desc.mip_levels).saturating_sub(1));
