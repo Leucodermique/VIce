@@ -130,7 +130,7 @@ header{
   top:0;
   z-index:10;
 }
-.head-left{display:flex;align-items:center;gap:18px}
+.head-left,.head-right{display:flex;align-items:center;gap:14px}
 .brand-mini{display:flex;align-items:center;gap:8px;cursor:pointer}
 .brand-mini img{height:24px;width:auto;display:block;filter:drop-shadow(0 2px 8px rgba(0,0,0,.45))}
 .brand-mini span{font-size:10px;letter-spacing:.22em;color:var(--muted);font-weight:650;padding-top:2px}
@@ -153,6 +153,29 @@ nav{display:flex;gap:4px;background:rgba(255,255,255,.06);border:1px solid rgba(
   color:#fff;
   box-shadow:0 3px 12px rgba(164,68,216,.32);
 }
+.lang-toggle{
+  display:inline-flex;
+  background:rgba(20,14,29,.65);
+  border:1px solid rgba(255,255,255,.14);
+  border-radius:999px;
+  padding:2px;
+  gap:2px;
+}
+.lang-btn{
+  border:0;
+  background:transparent;
+  color:var(--muted);
+  font-size:11px;
+  font-weight:650;
+  letter-spacing:.05em;
+  padding:4px 9px;
+  border-radius:999px;
+  cursor:pointer;
+  transition:background .15s,color .15s;
+}
+.lang-btn:hover{color:#fff}
+.lang-btn.active{background:rgba(200,143,255,.26);color:#fff}
+
 .status-pill{
   display:inline-flex;
   align-items:center;
@@ -186,10 +209,7 @@ main.wide{max-width:1060px}
 @keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 
 /* Hero VIce sur fond GTA 6 */
-.hero-logo-wrap{
-  text-align:center;
-  padding:22px 0 24px;
-}
+.hero-logo-wrap{text-align:center;padding:22px 0 24px}
 .hero-logo{
   width:clamp(250px,36vw,390px);
   max-width:82%;
@@ -424,13 +444,13 @@ select:focus,input:focus{border-color:var(--accent)}
 </style>
 </head>
 <body>
-<!-- Animation d'ouverture VIce Studio -->
-<div id="studio-intro" title="Cliquer pour passer">
+<!-- Intro cinématique VIce Studio -->
+<div id="studio-intro">
   <div class="intro-glow"></div>
   <img class="intro-emblem" id="intro-img" src="/art/studio-emblem.png" onerror="this.onerror=null;this.src='/art/vice-logo.svg'" alt="VIce Studio">
   <div class="intro-bar"></div>
   <div class="intro-title">VIce STUDIO</div>
-  <div class="intro-skip">Cliquer pour passer</div>
+  <div class="intro-skip" data-i18n="intro_skip">Cliquer pour passer</div>
 </div>
 
 <header>
@@ -440,13 +460,19 @@ select:focus,input:focus{border-color:var(--accent)}
       <span>STUDIO</span>
     </div>
     <nav role="tablist">
-      <button class="tab active" data-view="play" role="tab">Jouer</button>
-      <button class="tab dev-only" data-view="diag" role="tab">Diagnostics</button>
-      <button class="tab dev-only" data-view="logs" role="tab">Journaux</button>
-      <button class="tab" data-view="settings" role="tab">Paramètres</button>
+      <button class="tab active" data-view="play" role="tab" data-i18n="nav_play">Jouer</button>
+      <button class="tab dev-only" data-view="diag" role="tab" data-i18n="nav_diag">Diagnostics</button>
+      <button class="tab dev-only" data-view="logs" role="tab" data-i18n="nav_logs">Journaux</button>
+      <button class="tab" data-view="settings" role="tab" data-i18n="nav_settings">Paramètres</button>
     </nav>
   </div>
-  <div class="status-pill"><i class="dot" id="conn-dot"></i><span id="conn-text">Prêt</span></div>
+  <div class="head-right">
+    <div class="lang-toggle" role="group" aria-label="Language">
+      <button class="lang-btn active" data-lang="fr" type="button">FR</button>
+      <button class="lang-btn" data-lang="en" type="button">EN</button>
+    </div>
+    <div class="status-pill"><i class="dot" id="conn-dot"></i><span id="conn-text">Prêt</span></div>
+  </div>
 </header>
 
 <main id="main">
@@ -458,13 +484,12 @@ select:focus,input:focus{border-color:var(--accent)}
     </div>
 
     <div class="card">
-      <!-- Un seul bouton unifié qui switch selon si la fenêtre du jeu est ouverte -->
-      <button id="btn-play" class="mode-play">▶ Lancer le jeu</button>
+      <button id="btn-play" class="mode-play">▶ Jouer</button>
 
       <div class="row">
         <div class="row-label">
-          <strong>Console cible</strong>
-          <small>Profil de compatibilité (Xbox Series X recommandé)</small>
+          <strong data-i18n="console_label">Console cible</strong>
+          <small data-i18n="console_hint">Profil de compatibilité (Xbox Series X recommandé)</small>
         </div>
         <select id="opt-console">
           <option value="series-x">Xbox Series X</option>
@@ -475,37 +500,37 @@ select:focus,input:focus{border-color:var(--accent)}
       <!-- Options développeur uniquement -->
       <div class="row dev-only">
         <div class="row-label">
-          <strong>Version du moteur</strong>
-          <small id="meta-build-detail">Exécutable local</small>
+          <strong data-i18n="version_label">Version du moteur</strong>
+          <small id="meta-build-detail">—</small>
         </div>
         <select id="opt-version"><option value="victory.exe">victory.exe</option></select>
       </div>
 
       <div class="row dev-only">
         <div class="row-label">
-          <strong>Accélération GPU RTX</strong>
-          <small>Relais async, file COPY, buffers 1–768 Mo</small>
+          <strong data-i18n="fast_gpu_label">Accélération GPU RTX</strong>
+          <small data-i18n="fast_gpu_hint">Relais async, file COPY, buffers 1–768 Mo</small>
         </div>
         <label class="switch"><input id="opt-fast" type="checkbox" checked><span class="slider"></span></label>
       </div>
 
       <div class="row dev-only">
         <div class="row-label">
-          <strong>Fix murs DirectStorage</strong>
-          <small>Notifie le GPU après le streaming des décors</small>
+          <strong data-i18n="dstorage_label">Fix murs DirectStorage</strong>
+          <small data-i18n="dstorage_hint">Notifie le GPU après le streaming des décors</small>
         </div>
         <label class="switch"><input id="opt-dstorage" type="checkbox" checked><span class="slider"></span></label>
       </div>
 
       <div class="dev-chips dev-only">
-        <div class="chip"><span>Debug D3D12</span><label class="switch"><input id="opt-debug" type="checkbox"><span class="slider"></span></label></div>
-        <div class="chip"><span>Stats surface</span><label class="switch"><input id="opt-surface" type="checkbox"><span class="slider"></span></label></div>
-        <div class="chip"><span>WARP logiciel</span><label class="switch"><input id="opt-warp" type="checkbox"><span class="slider"></span></label></div>
+        <div class="chip"><span data-i18n="opt_debug">Debug D3D12</span><label class="switch"><input id="opt-debug" type="checkbox"><span class="slider"></span></label></div>
+        <div class="chip"><span data-i18n="opt_surface">Stats surface</span><label class="switch"><input id="opt-surface" type="checkbox"><span class="slider"></span></label></div>
+        <div class="chip"><span data-i18n="opt_warp">WARP logiciel</span><label class="switch"><input id="opt-warp" type="checkbox"><span class="slider"></span></label></div>
       </div>
 
       <div class="play-foot">
-        <span class="msg" id="msg" role="status">Prêt à lancer.</span>
-        <span id="play-summary">Dernière session : —</span>
+        <span class="msg" id="msg" role="status"></span>
+        <span id="play-summary">—</span>
       </div>
     </div>
   </section>
@@ -514,26 +539,26 @@ select:focus,input:focus{border-color:var(--accent)}
   <section id="view-diag" class="view">
     <div class="page-head">
       <div>
-        <h1>Diagnostics</h1>
-        <p id="diag-build">Build local —</p>
+        <h1 data-i18n="nav_diag">Diagnostics</h1>
+        <p id="diag-build">—</p>
       </div>
-      <button class="ghost" id="btn-go-logs">Ouvrir les journaux →</button>
+      <button class="ghost" id="btn-go-logs" data-i18n="open_logs">Ouvrir les journaux →</button>
     </div>
 
     <div class="stats">
-      <div class="stat"><span>FPS</span><strong id="st-fps">—</strong></div>
-      <div class="stat"><span>Temps / frame</span><strong id="st-ms">—</strong></div>
-      <div class="stat"><span>Draws / frame</span><strong id="st-draws">—</strong></div>
-      <div class="stat"><span>État sortie</span><strong id="st-exit">—</strong></div>
+      <div class="stat"><span data-i18n="stat_fps">FPS</span><strong id="st-fps">—</strong></div>
+      <div class="stat"><span data-i18n="stat_ms">Temps / frame</span><strong id="st-ms">—</strong></div>
+      <div class="stat"><span data-i18n="stat_draws">Draws / frame</span><strong id="st-draws">—</strong></div>
+      <div class="stat"><span data-i18n="stat_exit">État sortie</span><strong id="st-exit">—</strong></div>
     </div>
 
     <div class="two">
       <div class="card solid">
-        <h2>Compteurs GPU (vs session précédente)</h2>
+        <h2 data-i18n="gpu_counters">Compteurs GPU (vs session précédente)</h2>
         <div id="diag-rows"></div>
       </div>
       <div class="card solid">
-        <h2>Messages Direct3D (top IDs)</h2>
+        <h2 data-i18n="d3d_messages">Messages Direct3D (top IDs)</h2>
         <div id="diag-codes"></div>
       </div>
     </div>
@@ -542,24 +567,24 @@ select:focus,input:focus{border-color:var(--accent)}
   <!-- JOURNAUX (Mode dev) -->
   <section id="view-logs" class="view">
     <div class="toolbar">
-      <input type="text" id="log-q" placeholder="Filtrer (fps, erreur, shader, pipeline…)" autocomplete="off">
+      <input type="text" id="log-q" autocomplete="off">
       <select id="log-lvl">
-        <option value="all">Tous</option>
-        <option value="perf">Perf (FPS)</option>
-        <option value="error">Erreurs</option>
-        <option value="warn">Avertissements</option>
-        <option value="info">Infos</option>
+        <option value="all" data-i18n="lvl_all">Tous</option>
+        <option value="perf" data-i18n="lvl_perf">Perf (FPS)</option>
+        <option value="error" data-i18n="lvl_error">Erreurs</option>
+        <option value="warn" data-i18n="lvl_warn">Avertissements</option>
+        <option value="info" data-i18n="lvl_info">Infos</option>
       </select>
-      <button class="ghost" id="btn-log-refresh">Actualiser</button>
-      <button class="ghost" id="btn-log-copy">Copier</button>
-      <button class="ghost" id="btn-log-dir">Dossier</button>
+      <button class="ghost" id="btn-log-refresh" data-i18n="btn_refresh">Actualiser</button>
+      <button class="ghost" id="btn-log-copy" data-i18n="btn_copy">Copier</button>
+      <button class="ghost" id="btn-log-dir" data-i18n="btn_folder">Dossier</button>
     </div>
     <div class="log-box">
       <div class="log-head">
         <span id="log-meta">play.log</span>
         <span id="log-count">—</span>
       </div>
-      <div class="log-scroll" id="log-list"><div class="empty">Chargement…</div></div>
+      <div class="log-scroll" id="log-list"><div class="empty">—</div></div>
     </div>
   </section>
 
@@ -567,31 +592,41 @@ select:focus,input:focus{border-color:var(--accent)}
   <section id="view-settings" class="view">
     <div class="page-head">
       <div>
-        <h1>Paramètres</h1>
-        <p>Accès avancés et apparence de VIce Studio.</p>
+        <h1 data-i18n="nav_settings">Paramètres</h1>
+        <p data-i18n="settings_sub">Langue, apparence et accès avancés de VIce Studio.</p>
       </div>
     </div>
     <div class="card solid">
       <div class="row">
         <div class="row-label">
-          <strong>Animation d’ouverture</strong>
-          <small>Rejouer le logo animé VIce Studio</small>
+          <strong data-i18n="lang_label">Langue de l’interface</strong>
+          <small data-i18n="lang_hint">Français (principal) ou English (secondaire)</small>
         </div>
-        <button class="ghost" id="btn-replay-intro">Rejouer</button>
+        <select id="opt-lang">
+          <option value="fr">Français</option>
+          <option value="en">English</option>
+        </select>
       </div>
       <div class="row">
         <div class="row-label">
-          <strong>Mode développeur</strong>
-          <small id="dev-status">Désactivé — protégé par mot de passe</small>
+          <strong data-i18n="intro_label">Animation d’ouverture</strong>
+          <small data-i18n="intro_hint">Rejouer le logo animé VIce Studio</small>
+        </div>
+        <button class="ghost" id="btn-replay-intro" data-i18n="btn_replay">Rejouer</button>
+      </div>
+      <div class="row">
+        <div class="row-label">
+          <strong data-i18n="dev_label">Mode développeur</strong>
+          <small id="dev-status">—</small>
         </div>
         <button id="btn-dev-toggle">Activer</button>
       </div>
       <form id="dev-form" class="dev-form" hidden>
-        <label for="dev-pw" style="font-size:12.5px;color:var(--muted)">Mot de passe développeur</label>
+        <label for="dev-pw" style="font-size:12.5px;color:var(--muted)" data-i18n="dev_pw_label">Mot de passe développeur</label>
         <div class="dev-form-row">
-          <input id="dev-pw" type="password" placeholder="Saisir le mot de passe" autocomplete="off" required maxlength="256">
-          <button type="submit" class="btn-accent">Déverrouiller</button>
-          <button type="button" class="ghost" id="btn-dev-cancel">Annuler</button>
+          <input id="dev-pw" type="password" autocomplete="off" required maxlength="256">
+          <button type="submit" class="btn-accent" data-i18n="btn_unlock">Déverrouiller</button>
+          <button type="button" class="ghost" id="btn-dev-cancel" data-i18n="btn_cancel">Annuler</button>
         </div>
         <div class="msg" id="dev-msg" style="margin-top:8px"></div>
       </form>
@@ -601,6 +636,201 @@ select:focus,input:focus{border-color:var(--accent)}
 
 <script>
 const $ = id => document.getElementById(id);
+
+const I18N = {
+  fr: {
+    locale: "fr-FR",
+    intro_skip: "Cliquer pour passer",
+    nav_play: "Jouer",
+    nav_diag: "Diagnostics",
+    nav_logs: "Journaux",
+    nav_settings: "Paramètres",
+    console_label: "Console cible",
+    console_hint: "Profil de compatibilité (Xbox Series X recommandé)",
+    version_label: "Version du moteur",
+    fast_gpu_label: "Accélération GPU RTX",
+    fast_gpu_hint: "Relais async, file COPY, buffers 1–768 Mo",
+    dstorage_label: "Fix murs DirectStorage",
+    dstorage_hint: "Notifie le GPU après le streaming des décors",
+    opt_debug: "Debug D3D12",
+    opt_surface: "Stats surface",
+    opt_warp: "WARP logiciel",
+    open_logs: "Ouvrir les journaux →",
+    stat_fps: "FPS",
+    stat_ms: "Temps / frame",
+    stat_draws: "Draws / frame",
+    stat_exit: "État sortie",
+    gpu_counters: "Compteurs GPU (vs session précédente)",
+    d3d_messages: "Messages Direct3D (top IDs)",
+    lvl_all: "Tous",
+    lvl_perf: "Perf (FPS)",
+    lvl_error: "Erreurs",
+    lvl_warn: "Avertissements",
+    lvl_info: "Infos",
+    btn_refresh: "Actualiser",
+    btn_copy: "Copier",
+    btn_folder: "Dossier",
+    settings_sub: "Langue, apparence et accès avancés de VIce Studio.",
+    lang_label: "Langue de l’interface",
+    lang_hint: "Français (principal) ou English (secondaire)",
+    intro_label: "Animation d’ouverture",
+    intro_hint: "Rejouer le logo animé VIce Studio",
+    btn_replay: "Rejouer",
+    dev_label: "Mode développeur",
+    dev_pw_label: "Mot de passe développeur",
+    dev_pw_placeholder: "Saisir le mot de passe",
+    btn_unlock: "Déverrouiller",
+    btn_cancel: "Annuler",
+    btn_enable: "Activer",
+    btn_disable: "Désactiver",
+    dev_on: "Activé — outils techniques déverrouillés",
+    dev_off: "Désactivé — protégé par mot de passe",
+    log_placeholder: "Filtrer (fps, erreur, shader, pipeline…)",
+    btn_play: "▶ Jouer",
+    btn_stop: "■ Arrêter le jeu",
+    btn_starting: "■ Arrêter (ouverture de la fenêtre…)",
+    btn_launching: "Lancement…",
+    btn_closing: "Fermeture du jeu…",
+    msg_ready: "Prêt à lancer.",
+    msg_launching: "Lancement du jeu…",
+    msg_opening: "Ouverture de la fenêtre du jeu…",
+    msg_window_active: "Fenêtre du jeu active.",
+    msg_window_closed: "Fenêtre fermée — prêt à relancer.",
+    msg_closing: "Fermeture propre de la fenêtre du jeu…",
+    msg_stopped: "Jeu arrêté.",
+    msg_err_launch: "Impossible de lancer le jeu.",
+    msg_err_stop: "Impossible d'arrêter le jeu.",
+    msg_verifying: "Vérification…",
+    msg_bad_pw: "Mot de passe incorrect.",
+    msg_timeout: "Serveur local momentanément occupé.",
+    conn_ready: "Local · Prêt",
+    conn_dev: "Local · Dev",
+    conn_in_game: "En jeu",
+    conn_window_open: "Fenêtre ouverte",
+    conn_starting: "Démarrage…",
+    conn_reconnecting: "Reconnexion…",
+    conn_stopped: "Serveur arrêté",
+    summary_last: "Dernière session",
+    summary_normal: "Arrêt normal",
+    summary_code: "Code",
+    summary_ready: "Prêt",
+    summary_opening: "Ouverture de la fenêtre…",
+    build_current: "Build actuel",
+    build_none: "Aucun exécutable",
+    build_local_none: "Aucun build détecté",
+    build_local_prefix: "Build local",
+    unit_mb: "Mo",
+    state_open: "Ouvert",
+    state_starting: "Démarrage",
+    cnt_validation: "Messages D3D12",
+    cnt_unsupported: "Opérations non supportées",
+    cnt_rejected: "Pipelines rejetés",
+    cnt_slow: "Soumissions lentes",
+    cnt_fatal: "Erreurs GPU fatales",
+    no_d3d_msgs: "Aucun message Direct3D enregistré.",
+    log_empty: "Aucune ligne correspondante.",
+    log_copied: "play.log · copié !",
+    log_lines: (a, b, c) => `${a} / ${b} lignes (sur ${c})`,
+  },
+  en: {
+    locale: "en-US",
+    intro_skip: "Click to skip",
+    nav_play: "Play",
+    nav_diag: "Diagnostics",
+    nav_logs: "Logs",
+    nav_settings: "Settings",
+    console_label: "Target console",
+    console_hint: "Compatibility profile (Xbox Series X recommended)",
+    version_label: "Engine build",
+    fast_gpu_label: "RTX GPU Acceleration",
+    fast_gpu_hint: "Async relay, COPY queue, 1–768 MB card buffers",
+    dstorage_label: "DirectStorage Wall Fix",
+    dstorage_hint: "Notifies the GPU after physical-page streaming",
+    opt_debug: "D3D12 Debug",
+    opt_surface: "Surface Stats",
+    opt_warp: "Software WARP",
+    open_logs: "Open logs →",
+    stat_fps: "FPS",
+    stat_ms: "Frame time",
+    stat_draws: "Draws / frame",
+    stat_exit: "Exit state",
+    gpu_counters: "GPU Counters (vs previous session)",
+    d3d_messages: "Direct3D Messages (top IDs)",
+    lvl_all: "All",
+    lvl_perf: "Perf (FPS)",
+    lvl_error: "Errors",
+    lvl_warn: "Warnings",
+    lvl_info: "Info",
+    btn_refresh: "Refresh",
+    btn_copy: "Copy",
+    btn_folder: "Folder",
+    settings_sub: "Language, appearance, and advanced VIce Studio access.",
+    lang_label: "Interface language",
+    lang_hint: "Français (primary) or English (secondary)",
+    intro_label: "Startup animation",
+    intro_hint: "Replay the animated VIce Studio emblem",
+    btn_replay: "Replay",
+    dev_label: "Developer mode",
+    dev_pw_label: "Developer password",
+    dev_pw_placeholder: "Enter password",
+    btn_unlock: "Unlock",
+    btn_cancel: "Cancel",
+    btn_enable: "Enable",
+    btn_disable: "Disable",
+    dev_on: "Enabled — technical tools unlocked",
+    dev_off: "Disabled — password protected",
+    log_placeholder: "Filter (fps, error, shader, pipeline…)",
+    btn_play: "▶ Play",
+    btn_stop: "■ Stop game",
+    btn_starting: "■ Stop (opening window…)",
+    btn_launching: "Launching…",
+    btn_closing: "Closing game…",
+    msg_ready: "Ready to launch.",
+    msg_launching: "Launching game…",
+    msg_opening: "Opening game window…",
+    msg_window_active: "Game window active.",
+    msg_window_closed: "Window closed — ready to launch.",
+    msg_closing: "Closing game window cleanly…",
+    msg_stopped: "Game stopped.",
+    msg_err_launch: "Unable to launch game.",
+    msg_err_stop: "Unable to stop game.",
+    msg_verifying: "Verifying…",
+    msg_bad_pw: "Incorrect password.",
+    msg_timeout: "Local server is temporarily busy.",
+    conn_ready: "Local · Ready",
+    conn_dev: "Local · Dev",
+    conn_in_game: "In game",
+    conn_window_open: "Window open",
+    conn_starting: "Starting…",
+    conn_reconnecting: "Reconnecting…",
+    conn_stopped: "Server stopped",
+    summary_last: "Last session",
+    summary_normal: "Clean exit",
+    summary_code: "Code",
+    summary_ready: "Ready",
+    summary_opening: "Opening window…",
+    build_current: "Current build",
+    build_none: "No executable",
+    build_local_none: "No build detected",
+    build_local_prefix: "Local build",
+    unit_mb: "MB",
+    state_open: "Open",
+    state_starting: "Starting",
+    cnt_validation: "D3D12 messages",
+    cnt_unsupported: "Unsupported operations",
+    cnt_rejected: "Rejected pipelines",
+    cnt_slow: "Slow submissions",
+    cnt_fatal: "Fatal GPU errors",
+    no_d3d_msgs: "No Direct3D messages recorded.",
+    log_empty: "No matching lines.",
+    log_copied: "play.log · copied!",
+    log_lines: (a, b, c) => `${a} / ${b} lines (of ${c})`,
+  },
+};
+
+let lang = "fr";
+const t = key => (I18N[lang] && I18N[lang][key]) || I18N.fr[key] || key;
+
 let token = "__STUDIO_SESSION_TOKEN__";
 let state = null;
 let developer = false;
@@ -609,6 +839,55 @@ let lastLogEntries = [];
 let failCount = 0;
 let pollTimer = null;
 let actionBusy = false;
+let msgKey = "msg_ready";
+
+const PREF_KEY = "vice_studio_prefs_v4";
+function loadPrefs() {
+  try {
+    const p = JSON.parse(localStorage.getItem(PREF_KEY) || "{}");
+    if (p.lang === "fr" || p.lang === "en") lang = p.lang;
+    if (p.console) $("opt-console").value = p.console;
+    if (typeof p.fastGpu === "boolean") $("opt-fast").checked = p.fastGpu;
+    if (typeof p.dstorageNotify === "boolean") $("opt-dstorage").checked = p.dstorageNotify;
+  } catch {}
+}
+function savePrefs() {
+  try {
+    localStorage.setItem(PREF_KEY, JSON.stringify({
+      lang,
+      console: $("opt-console").value,
+      fastGpu: $("opt-fast").checked,
+      dstorageNotify: $("opt-dstorage").checked,
+    }));
+  } catch {}
+}
+
+function applyLanguage(newLang) {
+  lang = newLang === "en" ? "en" : "fr";
+  document.documentElement.lang = lang;
+  $("opt-lang").value = lang;
+  document.querySelectorAll(".lang-btn").forEach(b => b.classList.toggle("active", b.dataset.lang === lang));
+  document.querySelectorAll("[data-i18n]").forEach(el => {
+    const k = el.dataset.i18n;
+    if (typeof t(k) === "string") el.textContent = t(k);
+  });
+  $("studio-intro").title = t("intro_skip");
+  $("log-q").placeholder = t("log_placeholder");
+  $("dev-pw").placeholder = t("dev_pw_placeholder");
+  if (msgKey) setMsgKey(msgKey, $("msg").dataset.cls || "");
+  savePrefs();
+  if (state) {
+    // Force rebuild of build labels with localized dates
+    $("opt-version").dataset.sig = "";
+    renderState();
+    if (currentView === "logs" && developer) refreshLogs();
+  }
+}
+
+document.querySelectorAll(".lang-btn").forEach(b => b.onclick = () => applyLanguage(b.dataset.lang));
+$("opt-lang").onchange = () => applyLanguage($("opt-lang").value);
+["opt-console","opt-fast","opt-dstorage"].forEach(id => $(id).addEventListener("change", savePrefs));
+loadPrefs();
 
 // Intro cinématique d'ouverture
 let introTimer = null;
@@ -620,7 +899,6 @@ function playIntro(force = false) {
   }
   sessionStorage.setItem("vice_intro_seen", "1");
   el.classList.remove("done");
-  // Relance les animations CSS proprement si rejouée
   if (force) {
     el.querySelectorAll(".intro-glow,.intro-emblem,.intro-bar,.intro-title").forEach(n => {
       n.style.animation = "none";
@@ -645,28 +923,6 @@ document.addEventListener("keydown", e => {
 playIntro(false);
 $("btn-replay-intro").onclick = () => playIntro(true);
 
-// Préférences locales
-const PREF_KEY = "vice_studio_prefs_v4";
-function loadPrefs() {
-  try {
-    const p = JSON.parse(localStorage.getItem(PREF_KEY) || "{}");
-    if (p.console) $("opt-console").value = p.console;
-    if (typeof p.fastGpu === "boolean") $("opt-fast").checked = p.fastGpu;
-    if (typeof p.dstorageNotify === "boolean") $("opt-dstorage").checked = p.dstorageNotify;
-  } catch {}
-}
-function savePrefs() {
-  try {
-    localStorage.setItem(PREF_KEY, JSON.stringify({
-      console: $("opt-console").value,
-      fastGpu: $("opt-fast").checked,
-      dstorageNotify: $("opt-dstorage").checked,
-    }));
-  } catch {}
-}
-["opt-console","opt-fast","opt-dstorage"].forEach(id => $(id).addEventListener("change", savePrefs));
-loadPrefs();
-
 // API fiable : auto-reconnexion token sur 401 + timeout propre
 async function api(path, opts = {}, retry = true) {
   const ctrl = new AbortController();
@@ -687,10 +943,10 @@ async function api(path, opts = {}, retry = true) {
     const text = await res.text();
     let data = null;
     try { data = text ? JSON.parse(text) : null; } catch {}
-    if (!res.ok) throw new Error((data && data.error) || ("Erreur HTTP " + res.status));
+    if (!res.ok) throw new Error((data && data.error) || ("HTTP " + res.status));
     return data;
   } catch (err) {
-    if (err.name === "AbortError") throw new Error("Serveur local momentanément occupé.");
+    if (err.name === "AbortError") throw new Error(t("msg_timeout"));
     throw err;
   } finally {
     clearTimeout(timer);
@@ -699,12 +955,24 @@ async function api(path, opts = {}, retry = true) {
 
 function fmtDate(iso) {
   if (!iso) return "—";
-  try { return new Date(iso).toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" }); }
+  try { return new Date(iso).toLocaleString(t("locale"), { dateStyle: "short", timeStyle: "short" }); }
   catch { return iso; }
 }
+function fmtNum(n) {
+  return n == null ? "—" : Number(n).toLocaleString(t("locale"));
+}
 function setMsg(text, cls = "") {
+  msgKey = null;
   const el = $("msg");
   el.textContent = text || "";
+  el.dataset.cls = cls;
+  el.className = "msg" + (cls ? " " + cls : "");
+}
+function setMsgKey(key, cls = "") {
+  msgKey = key;
+  const el = $("msg");
+  el.textContent = t(key);
+  el.dataset.cls = cls;
   el.className = "msg" + (cls ? " " + cls : "");
 }
 function setConn(mode, text) {
@@ -724,9 +992,9 @@ function openView(v) {
 function applyDev(on) {
   developer = Boolean(on);
   document.body.classList.toggle("developer", developer);
-  $("dev-status").textContent = developer ? "Activé — outils techniques déverrouillés" : "Désactivé — protégé par mot de passe";
+  $("dev-status").textContent = developer ? t("dev_on") : t("dev_off");
   $("dev-status").className = developer ? "green" : "";
-  $("btn-dev-toggle").textContent = developer ? "Désactiver" : "Activer";
+  $("btn-dev-toggle").textContent = developer ? t("btn_disable") : t("btn_enable");
   if (!developer) {
     ["opt-debug","opt-surface","opt-warp"].forEach(id => $(id).checked = false);
     if (currentView === "diag" || currentView === "logs") openView("play");
@@ -737,23 +1005,18 @@ function renderPlayButton(activeBuild) {
   const btn = $("btn-play");
   const isOpen = Boolean(state && (state.windowOpen || state.running));
   const winOpen = Boolean(state && state.windowOpen);
-
-  if (actionBusy) {
-    btn.disabled = true;
-    return;
-  }
-
+  if (actionBusy) { btn.disabled = true; return; }
   if (winOpen) {
     btn.className = "mode-stop";
-    btn.textContent = "■ Arrêter le jeu";
+    btn.textContent = t("btn_stop");
     btn.disabled = false;
   } else if (isOpen) {
     btn.className = "mode-starting";
-    btn.textContent = "■ Arrêter (ouverture de la fenêtre…)";
+    btn.textContent = t("btn_starting");
     btn.disabled = false;
   } else {
     btn.className = "mode-play";
-    btn.textContent = "▶ Jouer";
+    btn.textContent = t("btn_play");
     btn.disabled = !activeBuild || !state || !state.title;
   }
 }
@@ -766,73 +1029,70 @@ function renderState() {
   const versions = state.versions || [];
   const primary = versions[0];
 
-  // Versions
   const sel = $("opt-version");
   const keep = sel.value;
-  const sig = versions.map(v => v.name).join("|");
+  const sig = lang + "|" + versions.map(v => v.name).join("|");
   if (sel.dataset.sig !== sig) {
     sel.dataset.sig = sig;
     sel.replaceChildren();
     versions.forEach((v, i) => {
       const opt = document.createElement("option");
       opt.value = v.name;
-      opt.textContent = i === 0 ? `Build actuel · ${fmtDate(v.date)}` : v.name;
+      opt.textContent = i === 0 ? `${t("build_current")} · ${fmtDate(v.date)}` : v.name;
       sel.append(opt);
     });
     if (versions.some(v => v.name === keep)) sel.value = keep;
   }
   const activeBuild = versions.find(v => v.name === sel.value) || primary;
   $("meta-build-detail").textContent = activeBuild
-    ? `${activeBuild.name} · ${(activeBuild.size / 1048576).toFixed(1)} Mo · ${fmtDate(activeBuild.date)}`
-    : "Aucun exécutable";
+    ? `${activeBuild.name} · ${(activeBuild.size / 1048576).toFixed(1)} ${t("unit_mb")} · ${fmtDate(activeBuild.date)}`
+    : t("build_none");
   $("diag-build").textContent = activeBuild
-    ? `Build local : ${activeBuild.name} (${(activeBuild.size / 1048576).toFixed(1)} Mo) · ${fmtDate(activeBuild.date)}`
-    : "Aucun build détecté";
+    ? `${t("build_local_prefix")}: ${activeBuild.name} (${(activeBuild.size / 1048576).toFixed(1)} ${t("unit_mb")}) · ${fmtDate(activeBuild.date)}`
+    : t("build_local_none");
 
   renderPlayButton(activeBuild);
 
-  // Résumé + pastille en fonction de l'ouverture réelle de la fenêtre
   if (state.windowOpen) {
-    const liveInfo = cur.fps != null ? `${cur.fps.toFixed(1)} fps · ${cur.ms.toFixed(0)} ms` : "Fenêtre ouverte";
-    $("play-summary").textContent = `En jeu · ${liveInfo}`;
+    const liveInfo = cur.fps != null ? `${cur.fps.toFixed(1)} fps · ${cur.ms.toFixed(0)} ms` : t("conn_window_open");
+    $("play-summary").textContent = `${t("conn_in_game")} · ${liveInfo}`;
     $("play-summary").className = "green";
-    setConn("live", cur.fps != null ? `En jeu · ${cur.fps.toFixed(1)} fps` : "Fenêtre ouverte");
-    if (!actionBusy) setMsg("Fenêtre du jeu active.", "ok");
+    setConn("live", cur.fps != null ? `${t("conn_in_game")} · ${cur.fps.toFixed(1)} fps` : t("conn_window_open"));
+    if (!actionBusy) setMsgKey("msg_window_active", "ok");
   } else if (state.running) {
-    $("play-summary").textContent = "Ouverture de la fenêtre…";
+    $("play-summary").textContent = t("summary_opening");
     $("play-summary").className = "amber";
-    setConn("warn", "Démarrage…");
+    setConn("warn", t("conn_starting"));
   } else {
-    const exTxt = cur.exit === "0" ? "Arrêt normal" : cur.exit != null ? `Code ${cur.exit}` : "Prêt";
+    const exTxt = cur.exit === "0" ? t("summary_normal") : cur.exit != null ? `${t("summary_code")} ${cur.exit}` : t("summary_ready");
     const fpsTxt = cur.fps != null ? ` · ${cur.fps.toFixed(1)} fps` : "";
-    $("play-summary").textContent = `Dernière session : ${exTxt}${fpsTxt}`;
+    $("play-summary").textContent = `${t("summary_last")}: ${exTxt}${fpsTxt}`;
     $("play-summary").className = cur.exit === "0" ? "green" : cur.exit != null ? "red" : "";
-    setConn("", developer ? "Local · Dev" : "Local · Prêt");
-    if (!actionBusy && $("msg").textContent === "Fenêtre du jeu active.") setMsg("Fenêtre fermée — prêt à relancer.");
+    setConn("", developer ? t("conn_dev") : t("conn_ready"));
+    if (!actionBusy && msgKey === "msg_window_active") setMsgKey("msg_window_closed");
   }
 
-  // Diagnostics (mode dev)
   if (developer) {
     $("st-fps").textContent = cur.fps != null ? cur.fps.toFixed(1) : "—";
     $("st-ms").textContent = cur.ms != null ? `${cur.ms.toFixed(0)} ms` : "—";
-    $("st-draws").textContent = cur.draws != null ? cur.draws.toLocaleString("fr-FR") : "—";
+    $("st-draws").textContent = fmtNum(cur.draws);
     const ex = $("st-exit");
-    ex.textContent = state.windowOpen ? "Ouvert" : state.running ? "Démarrage" : cur.exit === "0" ? "OK (0)" : cur.exit != null ? `Code ${cur.exit}` : "—";
+    ex.textContent = state.windowOpen ? t("state_open") : state.running ? t("state_starting") : cur.exit === "0" ? "OK (0)" : cur.exit != null ? `${t("summary_code")} ${cur.exit}` : "—";
     ex.className = (state.windowOpen || cur.exit === "0") ? "green" : state.running ? "amber" : cur.exit != null ? "red" : "";
 
     const rows = $("diag-rows");
     rows.replaceChildren();
-    for (const [k, lbl] of [
-      ["validation","Messages D3D12"],
-      ["unsupported","Opérations non supportées"],
-      ["rejected","Pipelines rejetés"],
-      ["slow","Soumissions lentes"],
-      ["fatal","Erreurs GPU fatales"],
+    for (const [k, i18nKey] of [
+      ["validation","cnt_validation"],
+      ["unsupported","cnt_unsupported"],
+      ["rejected","cnt_rejected"],
+      ["slow","cnt_slow"],
+      ["fatal","cnt_fatal"],
     ]) {
       const n = (cur.counts && cur.counts[k]) || 0;
       const d = n - ((prev.counts && prev.counts[k]) || 0);
       const r = document.createElement("div"); r.className = "row";
-      const s = document.createElement("span"); s.textContent = lbl;
+      const s = document.createElement("span"); s.textContent = t(i18nKey);
       const right = document.createElement("div"); right.style.cssText = "display:flex;gap:10px;align-items:center";
       if (prev.meta && cur.meta) {
         const dl = document.createElement("span");
@@ -842,7 +1102,7 @@ function renderState() {
         right.append(dl);
       }
       const b = document.createElement("strong");
-      b.textContent = cur.meta ? n.toLocaleString("fr-FR") : "—";
+      b.textContent = cur.meta ? fmtNum(n) : "—";
       if (k === "fatal" && n > 0) b.className = "red";
       right.append(b);
       r.append(s, right);
@@ -855,13 +1115,13 @@ function renderState() {
     if (!codes.length) {
       const e = document.createElement("div");
       e.style.color = "var(--muted)"; e.style.fontSize = "12px";
-      e.textContent = "Aucun message Direct3D enregistré.";
+      e.textContent = t("no_d3d_msgs");
       codesEl.append(e);
     } else {
       for (const [id, n] of codes) {
         const w = document.createElement("div"); w.className = "bar-wrap";
         const l = document.createElement("div"); l.className = "bar-lbl";
-        l.innerHTML = `<span>ID ${id}</span><strong>${n.toLocaleString("fr-FR")}</strong>`;
+        l.innerHTML = `<span>ID ${id}</span><strong>${fmtNum(n)}</strong>`;
         const tr = document.createElement("div"); tr.className = "track";
         const fl = document.createElement("div"); fl.className = "fill";
         fl.style.width = (n / codes[0][1] * 100) + "%";
@@ -879,7 +1139,7 @@ async function pollState() {
     if (currentView === "logs" && developer) await refreshLogs();
   } catch {
     failCount++;
-    setConn(failCount >= 3 ? "off" : "warn", failCount >= 3 ? "Serveur arrêté" : "Reconnexion…");
+    setConn(failCount >= 3 ? "off" : "warn", failCount >= 3 ? t("conn_stopped") : t("conn_reconnecting"));
   } finally {
     const delay = failCount > 0
       ? Math.min(8000, 1000 * failCount)
@@ -896,10 +1156,10 @@ async function refreshLogs() {
   try {
     const data = await api(`/api/logs?q=${q}&level=${lvl}&limit=350`);
     lastLogEntries = data.entries || [];
-    $("log-count").textContent = `${lastLogEntries.length} / ${data.matched} lignes (sur ${data.total})`;
+    $("log-count").textContent = t("log_lines")(lastLogEntries.length, data.matched, data.total);
     const list = $("log-list");
     if (!lastLogEntries.length) {
-      list.innerHTML = '<div class="empty">Aucune ligne correspondante.</div>';
+      list.innerHTML = `<div class="empty">${t("log_empty")}</div>`;
       return;
     }
     const atBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 40;
@@ -908,8 +1168,8 @@ async function refreshLogs() {
       const row = document.createElement("div"); row.className = "log-line";
       const n = document.createElement("span"); n.className = "log-n"; n.textContent = e.n;
       const l = document.createElement("span"); l.className = "log-lvl " + e.lvl; l.textContent = e.lvl;
-      const t = document.createElement("span"); t.className = "log-txt"; t.textContent = e.text;
-      row.append(n, l, t);
+      const txt = document.createElement("span"); txt.className = "log-txt"; txt.textContent = e.text;
+      row.append(n, l, txt);
       frag.append(row);
     }
     list.replaceChildren(frag);
@@ -919,33 +1179,31 @@ async function refreshLogs() {
   }
 }
 
-// Navigation
 document.querySelectorAll(".tab").forEach(btn => btn.onclick = () => openView(btn.dataset.view));
 $("brand-home").onclick = () => openView("play");
 $("btn-go-logs").onclick = () => openView("logs");
 
-// Un seul bouton unifié Jouer / Arrêter
 $("btn-play").onclick = async () => {
   if (actionBusy) return;
   const shouldStop = Boolean(state && (state.windowOpen || state.running));
   actionBusy = true;
   $("btn-play").disabled = true;
   if (shouldStop) {
-    $("btn-play").textContent = "Fermeture du jeu…";
-    setMsg("Fermeture propre de la fenêtre du jeu…");
+    $("btn-play").textContent = t("btn_closing");
+    setMsgKey("msg_closing");
     try {
       await api("/api/stop", { method: "POST" });
-      setMsg("Jeu arrêté.");
+      setMsgKey("msg_stopped");
     } catch (err) {
-      setMsg(err.message || "Impossible d'arrêter le jeu.", "err");
+      setMsg(err.message || t("msg_err_stop"), "err");
     } finally {
       actionBusy = false;
       await pollState();
     }
   } else {
     $("btn-play").className = "mode-starting";
-    $("btn-play").textContent = "Lancement…";
-    setMsg("Lancement du jeu…");
+    $("btn-play").textContent = t("btn_launching");
+    setMsgKey("msg_launching");
     try {
       await api("/api/launch", {
         method: "POST",
@@ -960,9 +1218,9 @@ $("btn-play").onclick = async () => {
           warp: developer && $("opt-warp").checked,
         }),
       });
-      setMsg("Ouverture de la fenêtre du jeu…", "ok");
+      setMsgKey("msg_opening", "ok");
     } catch (err) {
-      setMsg(err.message || "Impossible de lancer le jeu.", "err");
+      setMsg(err.message || t("msg_err_launch"), "err");
     } finally {
       actionBusy = false;
       await pollState();
@@ -970,7 +1228,6 @@ $("btn-play").onclick = async () => {
   }
 };
 
-// Mode développeur (mot de passe)
 $("btn-dev-toggle").onclick = async () => {
   $("dev-msg").textContent = "";
   if (developer) {
@@ -999,7 +1256,7 @@ $("dev-form").onsubmit = async e => {
   e.preventDefault();
   const pw = $("dev-pw").value;
   $("dev-pw").value = "";
-  $("dev-msg").textContent = "Vérification…";
+  $("dev-msg").textContent = t("msg_verifying");
   $("dev-msg").className = "msg";
   try {
     await api("/api/developer", {
@@ -1011,12 +1268,11 @@ $("dev-form").onsubmit = async e => {
     $("dev-msg").textContent = "";
     await pollState();
   } catch (err) {
-    $("dev-msg").textContent = err.message || "Mot de passe incorrect.";
+    $("dev-msg").textContent = err.message || t("msg_bad_pw");
     $("dev-msg").className = "msg err";
   }
 };
 
-// Journaux
 let logDebounce = null;
 $("log-q").oninput = () => { clearTimeout(logDebounce); logDebounce = setTimeout(refreshLogs, 150); };
 $("log-lvl").onchange = refreshLogs;
@@ -1025,12 +1281,13 @@ $("btn-log-copy").onclick = async () => {
   if (!lastLogEntries.length) return;
   try {
     await navigator.clipboard.writeText(lastLogEntries.map(e => e.text).join("\n"));
-    $("log-meta").textContent = "play.log · copié !";
+    $("log-meta").textContent = t("log_copied");
     setTimeout(() => $("log-meta").textContent = "play.log", 1500);
   } catch {}
 };
 $("btn-log-dir").onclick = () => api("/api/open-log-dir", { method: "POST" }).catch(() => {});
 
+applyLanguage(lang);
 pollState();
 </script>
 </body>
