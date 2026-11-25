@@ -580,9 +580,12 @@ def launch_game(cfg, developer):
             env.pop("VICTORY_DISPLAY_MODE", None)
         env["VICTORY_AMBIENT"] = "off" if bvh_builder else "0.45"
         env["VICTORY_TEXTURE_DROP_MIPS"] = "2"
-        env.pop("VICTORY_RELAY", None)
+        env["VICTORY_RELAY"] = "2"
         env["VICTORY_ASYNC_SUBMIT"] = "1"
+        env["VICTORY_ASYNC_PRESENT"] = "1"
         env["VICTORY_QUEUE2"] = "1"
+        env["VICTORY_COPY_PLAIN"] = "1"
+        env["VICTORY_DISK_CORES"] = "slow"
         env["VICTORY_INDIRECT_WINDOW"] = "1"
         env["VICTORY_INDIRECT_WINDOW_DRAWS"] = "1"
         env["VICTORY_INDIRECT_GATHER"] = "1"
@@ -738,7 +741,7 @@ def launch_game(cfg, developer):
                     f"Engine: {engine}",
                     f"Engine build: {datetime.fromtimestamp(engine.stat().st_mtime).isoformat(timespec='seconds')}",
                     f"Console: {console} | FastGPU: {int(fast_gpu)} | DStorageNotify: {int(dstorage_notify)} | BVH: {int(bvh_builder)}",
-                    f"GPU opts: Res={env.get('VICTORY_RESOLUTION', 'native')} | DropMips={env.get('VICTORY_TEXTURE_DROP_MIPS', '0')} | Async={env.get('VICTORY_ASYNC_SUBMIT', '0')}/Q2={env.get('VICTORY_QUEUE2', '0')} | CardBuf={env.get('VICTORY_CARD_BUFFERS_MB')}MB(min={env.get('VICTORY_CARD_BUFFERS_MIN_KB', '1024')}KB) | Gather={env.get('VICTORY_INDIRECT_GATHER', '0')} | SkipWC={env.get('VICTORY_SKIP_WC_COMPARE', '0')} | HeapWorker={env.get('VICTORY_HEAP_WORKER', '0')} | Holes={env.get('VICTORY_GUARD_HOLES_FRAME', '0')} | TexStageMs={env.get('VICTORY_TEXTURE_STAGE_MS')}",
+                    f"GPU opts: Res={env.get('VICTORY_RESOLUTION', 'native')} | DropMips={env.get('VICTORY_TEXTURE_DROP_MIPS', '0')} | Relay={env.get('VICTORY_RELAY', '0')}/Async={env.get('VICTORY_ASYNC_SUBMIT', '0')}/APres={env.get('VICTORY_ASYNC_PRESENT', '0')}/Q2={env.get('VICTORY_QUEUE2', '0')}/Plain={env.get('VICTORY_COPY_PLAIN', '0')} | CardBuf={env.get('VICTORY_CARD_BUFFERS_MB')}MB(min={env.get('VICTORY_CARD_BUFFERS_MIN_KB', '1024')}KB) | Gather={env.get('VICTORY_INDIRECT_GATHER', '0')} | SkipWC={env.get('VICTORY_SKIP_WC_COMPARE', '0')} | Ambient={env.get('VICTORY_AMBIENT', 'off')}",
                     f"Direct3D debug: {env.get('VICTORY_D3D12_DEBUG', '0')} | Surface: {env.get('VICE_SURFACE_STATS', '0')} | WARP: {env.get('VICTORY_D3D12_WARP', '0')}",
                 ]
                 for h in header:
