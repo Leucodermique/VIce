@@ -23,6 +23,17 @@ const SLOT_IN_PLACED: u8 = 1 << 1;
 /// [`HostHeap::buffers`].
 const SLOT_IN_BUFFERS: u8 = 1 << 2;
 
+/// The slots of one piece of [`HostHeap::kept`].
+const KEPT_PIECE: u32 = 1024;
+
+/// Whether a slot made from the same record already is found without the
+/// heap's lock ([`HostHeap::made_now`]). On by default;
+/// `VICTORY_HEAP_LOCKS=0`: under the lock, as before.
+fn heap_locks() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_HEAP_LOCKS").is_none_or(|v| v != "0"))
+}
+
 pub(crate) struct HostHeap {
     pub(crate) heap: ID3D12DescriptorHeap,
     cpu: usize,
@@ -36,6 +47,13 @@ pub(crate) struct HostHeap {
     sampler: bool,
     /// The record (view index and generation) each slot was last made from.
     made: Mutex<Vec<u64>>,
+    /// The same, readable without the lock: written under it wherever
+    /// `made` is. A slot whose record has not changed is the common case
+    /// (every table entry of every draw asks), and the recording threads
+    /// stood in line for the lock to find that out (a fifth of their time
+    /// in list calls waiting here and in `kept`, profile of 2026-11-25 on
+    /// a six-thread processor). `VICTORY_HEAP_LOCKS=0`: the lock always.
+    made_now: Vec<std::sync::atomic::AtomicU64>,
     /// A fingerprint of the record each slot held when the pass over
     /// records copied in as bytes last looked at it
     /// ([`HostHeap::mirror_copied`]; 0: never looked at). Made on first use.
@@ -44,7 +62,9 @@ pub(crate) struct HostHeap {
     /// index heaps directly, so a slot the title has not rewritten since it
     /// released the resource may still be read, and a freed host resource
     /// read there is a GPU page fault (the console reads stale memory).
-    kept: Mutex<Vec<Option<ID3D12Resource>>>,
+    /// In pieces of [`KEPT_PIECE`] slots, each behind its own lock: the
+    /// recording threads make their tables' slots at the same time.
+    kept: Vec<Mutex<Vec<Option<ID3D12Resource>>>>,
     /// Where the search for free dynamic slots starts, and which are taken
     /// (by lists not yet reset).
     next: Mutex<(u32, Vec<bool>)>,
@@ -1015,8 +1035,9 @@ impl HostHeap {
             dynamic: extra,
             sampler,
             made: Mutex::new(vec![0; count as usize]),
+            made_now: (0..count).map(|_| std::sync::atomic::AtomicU64::new(0)).collect(),
             copied: Mutex::new(Vec::new()),
-            kept: Mutex::new(vec![None; (count + extra) as usize]),
+            kept: (0..(count + extra).div_ceil(KEPT_PIECE)).map(|_| Mutex::new(vec![None; KEPT_PIECE as usize])).collect(),
             next: Mutex::new((0, vec![false; DYNAMIC as usize])),
             free: std::sync::atomic::AtomicU32::new(DYNAMIC),
             too_long: std::sync::atomic::AtomicU32::new(u32::MAX),
@@ -1378,12 +1399,9 @@ impl HostHeap {
         // as `mirror` takes them.
         let made = self.made.lock().unwrap_or_else(|e| e.into_inner());
         made.get(index as usize).is_some_and(|&made| made != 0 && made == key)
-            && self
-                .kept
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .get(index as usize)
-                .is_some_and(Option::is_some)
+            && self.kept.get((index / KEPT_PIECE) as usize).is_some_and(|piece| {
+                piece.lock().unwrap_or_else(|e| e.into_inner()).get((index % KEPT_PIECE) as usize).is_some_and(Option::is_some)
+            })
     }
 
     /// Levels on demand (`crate::tiles`): makes again the host slots of the
@@ -1509,6 +1527,7 @@ impl HostHeap {
         let Some(key) = made.get_mut(index as usize).map(std::mem::take) else {
             return;
         };
+        self.made_now[index as usize].store(0, std::sync::atomic::Ordering::Release);
         if key == 0 {
             return;
         }
@@ -1836,13 +1855,18 @@ impl HostHeap {
 
     /// Slot `index` now views `resource` (or nothing of the host's).
     fn keep(&self, index: u32, resource: Option<ID3D12Resource>) {
-        let mut kept = self.kept.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(slot) = kept.get_mut(index as usize) {
-            // A running submission may still read the old resource through
-            // this slot.
-            if let Some(old) = std::mem::replace(slot, resource) {
-                crate::host::retire(old);
-            }
+        let Some(piece) = self.kept.get((index / KEPT_PIECE) as usize) else {
+            return;
+        };
+        let old = {
+            let mut kept = piece.lock().unwrap_or_else(|e| e.into_inner());
+            std::mem::replace(&mut kept[(index % KEPT_PIECE) as usize], resource)
+        };
+        // A running submission may still read the old resource through
+        // this slot. (Outside the lock: letting go takes another, or frees
+        // a host resource.)
+        if let Some(old) = old {
+            crate::host::retire(old);
         }
     }
 
@@ -2198,11 +2222,19 @@ impl HostHeap {
         // Generations start at 1, so a made slot's key is never 0.
         let key = u64::from(generation) << 32 | u64::from(i);
         let view = (tag == VIEW_TAG).then(|| view_at(i, generation)).flatten();
+        // Made from this record already: nothing to do, and no lock.
+        if heap_locks() && self.made_now[index as usize].load(std::sync::atomic::Ordering::Acquire) == key {
+            if let Some(view) = view {
+                return Some((view, None));
+            }
+        }
+        let mut made = self.made.lock().unwrap_or_else(|e| e.into_inner());
         let Some(view) = view else {
             // Not a view of ours (never written, or of a resource the
             // title released): nothing to read.
             if made[index as usize] != 0 {
                 made[index as usize] = 0;
+                self.made_now[index as usize].store(0, std::sync::atomic::Ordering::Release);
                 self.make_null(index);
                 let _ = self.note_buffer_into(index, None, false, record_change, batch);
             } else if for_draw {
@@ -2284,6 +2316,9 @@ impl HostHeap {
                     }
                 }
             }
+            // After the slot is made: a reader without the lock takes the
+            // record as made only once it is.
+            self.made_now[index as usize].store(made[index as usize], std::sync::atomic::Ordering::Release);
         }
         Some((view, resolved))
     }
@@ -2303,8 +2338,8 @@ impl HostHeap {
     /// that is brought up to date for it).
     #[cfg(feature = "diagnostics")]
     pub(crate) fn shows(&self, index: u32, buffer: &ID3D12Resource) -> Option<bool> {
-        let kept = self.kept.lock().unwrap_or_else(|e| e.into_inner());
-        let shown = kept.get(index as usize)?.as_ref()?;
+        let kept = self.kept.get((index / KEPT_PIECE) as usize)?.lock().unwrap_or_else(|e| e.into_inner());
+        let shown = kept.get((index % KEPT_PIECE) as usize)?.as_ref()?;
         Some(windows::core::Interface::as_raw(shown) == windows::core::Interface::as_raw(buffer))
     }
 
