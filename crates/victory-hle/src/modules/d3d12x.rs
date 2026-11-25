@@ -36,8 +36,7 @@ fn host_gpu_failed(what: &str) -> ! {
     unreachable!("the process has ended")
 }
 
-/// Translates one shader container into the cache a run reads
-/// (`victory translate --warm`): `Ok(true)` when it was translated now.
+/// The offline warm-up: see `victory_gpu::shader_cache::warm`.
 pub fn warm_shader(container: &[u8]) -> Result<bool, String> {
     #[cfg(windows)]
     {
@@ -46,7 +45,7 @@ pub fn warm_shader(container: &[u8]) -> Result<bool, String> {
     #[cfg(not(windows))]
     {
         let _ = container;
-        Err("warming needs Windows".into())
+        Err("no shader cache on this host".into())
     }
 }
 

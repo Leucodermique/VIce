@@ -530,31 +530,53 @@ def launch_game(cfg, developer):
 
     fast_gpu = bool(cfg.get("fastGpu", True)) if developer else True
     dstorage_notify = bool(cfg.get("dstorageNotify", True)) if developer else True
+    bvh_builder = bool(cfg.get("bvhBuilder", True))
 
     if fast_gpu:
-        # RELAY=1 keeps async copy-back without stage-2 races that drop character skin/walls (#89/#168).
+        # RTX 4070 8 GB / 16 GB RAM optimal set (fxceless 3973179 + #854/#993/#994):
+        # - LEVELS_ON_DEMAND=1 saves ~3.1 GB VRAM for unstreamed mip levels
+        # - RELAY=1 + ASYNC_SUBMIT=1 + QUEUE2=1 + INDIRECT_WINDOW=1 + COPY_PLAIN=1
+        #   + JOIN_PARTS=1 + BACK_OWN_VIEW=1 + TEXTURE_NO_WAIT=1 (7-9.6 fps on RTX 4070)
+        # - DRIVER_WATCH stays ON by default to disable INDIRECT_WINDOW before any TDR
+        env["VICTORY_LEVELS_ON_DEMAND"] = "1"
         env["VICTORY_RELAY"] = "1"
+        env["VICTORY_ASYNC_SUBMIT"] = "1"
+        env["VICTORY_QUEUE2"] = "1"
+        env["VICTORY_INDIRECT_WINDOW"] = "1"
+        env["VICTORY_COPY_PLAIN"] = "1"
+        env["VICTORY_JOIN_PARTS"] = "1"
+        env["VICTORY_BACK_OWN_VIEW"] = "1"
+        env["VICTORY_TEXTURE_NO_WAIT"] = "1"
         env["VICTORY_WIDE_BACK"] = "1"
         env["VICTORY_CARD_REHASH_RUNS"] = "1"
         env["VICTORY_LATE_WAIT_LISTS"] = "512"
         env["VICTORY_CARD_BUFFERS_MIN_MB"] = "1"
         env["VICTORY_CARD_BUFFERS_MB"] = "512"
         env["VICTORY_TEXTURE_ROOM_PERCENT"] = "94"
-        env["VICTORY_TEXTURE_SPILL_PERCENT"] = "68"
+        env["VICTORY_CARD_ROOM_FOR_TARGETS_MB"] = "2048"
         env["VICTORY_PIPELINE_COMMIT_MB"] = "768"
         env["VICTORY_PIPELINE_WAIT_MS"] = "1000"
     else:
+        env["VICTORY_LEVELS_ON_DEMAND"] = "1"
         env["VICTORY_RELAY"] = "0"
+        env["VICTORY_ASYNC_SUBMIT"] = "0"
+        env["VICTORY_QUEUE2"] = "0"
+        env["VICTORY_INDIRECT_WINDOW"] = "0"
+        env["VICTORY_COPY_PLAIN"] = "0"
+        env["VICTORY_JOIN_PARTS"] = "0"
+        env["VICTORY_BACK_OWN_VIEW"] = "0"
         env["VICTORY_WIDE_BACK"] = "0"
         env["VICTORY_CARD_REHASH_RUNS"] = "1"
         env["VICTORY_LATE_WAIT_LISTS"] = "128"
         env["VICTORY_CARD_BUFFERS_MIN_MB"] = "16"
         env["VICTORY_CARD_BUFFERS_MB"] = "512"
         env["VICTORY_TEXTURE_ROOM_PERCENT"] = "94"
-        env["VICTORY_TEXTURE_SPILL_PERCENT"] = "68"
+        env["VICTORY_CARD_ROOM_FOR_TARGETS_MB"] = "2048"
         env["VICTORY_PIPELINE_COMMIT_MB"] = "768"
         env["VICTORY_PIPELINE_WAIT_MS"] = "1000"
 
+    env["VICTORY_BVH_BUILDER"] = "1" if bvh_builder else "0"
+    env["VICTORY_PAGE_WRITES"] = "1" if dstorage_notify else "0"
     env["VICTORY_DSTORAGE_NOTIFY"] = "1" if dstorage_notify else "0"
 
     for env_key, opt_key in (

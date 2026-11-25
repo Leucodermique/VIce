@@ -53,40 +53,23 @@ VIce tracks and integrates verified advancements from:
 | **Boot, first-boot setup & menus** | Working cleanly at **30 fps** (zero intro video flicker). |
 | **Opening cutscene** | Plays start-to-finish, lit and in order (title cards, credits, night/dusk exterior shots). |
 | **Saves & checkpoints** | Autosave checkpoint creation and reload working. |
-| **First playable scene (prison cell & yard)** | Renders characters, hair/skin textures, solid walls & ceiling, sunlit exterior, HUD, pause menu, and pad/keyboard input (`5,000–6,376 draws/frame`, `Exit code: 0`, only **2** unsupported shader ops remaining in full runs). |
-| **Cell lamp & depth-bounded lighting** | Enabled via Depth Bounds Test (`#82` — `DEPTH_STENCIL1` + `OMSetDepthBounds`). |
-| **Shaded interiors (bounce light)** | Still dark where direct light does not reach (RT GI / BVH trace off by default; **52/52** `XboxBvhBuilder.dll` shaders now validate & build D3D12 PSOs on RTX 4070 32-lane waves via PR `#601`). |
-| **In-world frame rate** | Progressed from **100% black screen / 1 fps** to **2–4+ fps** (`240–450 ms/frame`), with ongoing work to move remaining CPU buffer scans to the GPU `COPY` queue. |
+| **First playable scene (prison cell & yard)** | Renders correctly with walls, ceiling, character skin/hair, sunlit exterior, HUD, pause menu, and pad/keyboard input. |
+| **Shader coverage (NVIDIA 32-lane)** | **25,948 / 25,953 shaders translated (99.98%)** via `fxceless` PRs `#854` + `#993` + `#1006` + `#501` (**100% Pixel Shaders, 100% Vertex Shaders, 195 Geometry Shaders**, paired wave64 on 32-lane NVIDIA, mesh >32 KiB linking, and `f5e50eb2108c425b` integer-RT fix). |
+| **Ray Tracing (BVH Builder)** | **Live ray-tracing structure builder (`VICTORY_BVH_BUILDER=1`, PR `#994`)** runs all 52 `XboxBvhBuilder.dll` shaders cleanly without crashing, lighting indirect/shaded interiors and faces (toggleable in VIce Studio settings). |
+| **VRAM & In-world frame rate** | **Levels on demand (`VICTORY_LEVELS_ON_DEMAND=1`)** saves **~3.1 GB VRAM** on RTX 4070 8 GB; full `fxceless/main` (`3973179`) speed stack (`ASYNC_SUBMIT`, `QUEUE2`, `INDIRECT_WINDOW` + anti-TDR `DRIVER_WATCH`, `COPY_PLAIN`, `JOIN_PARTS`, `BACK_OWN_VIEW`) reaches **7–9.6 fps** in the first rooms (**10–12 fps** in lighter views). |
 
-### 1. Rendering & Visual Fidelity
-- **Black screen → full lit 3D world on NVIDIA**: adopted raw-view handling for `StructuredBuffer` loads, meshlet culling fixes, `STAND_INS [(86, 28), (115, 28)]`, and the NVIDIA 1M descriptor-heap clamp.
-- **Depth Bounds Test (`#82`, `fxceless c96b4f2` + `LooperSalty 35cdf6f`)**: creates `DEPTH_STENCIL1` pipelines and forwards `OMSetDepthBounds` to the host command list so room lamps properly illuminate walls, tables, and bunks.
-- **Character skin & hair color fixes (`a803c87` + `c96b4f2`)**: re-checks bindless indexed textures after upload (`4/12/40/120/400` frames) and uploads bindless textures before the character decoration bake runs (`VICTORY_EARLY_TEXTURES_MS`, `VICTORY_BAKE_TEXTURES_MS`).
-- **Packed bindless textures & full-VRAM refresh (`fxceless 310c6eb`)**: prevents packed neighbouring texture views from invalidating tens of thousands of upload-queue slots (`VICTORY_STALE_TEXTURES` now marks older views stale only within the first 4 KiB) and allows already-resident textures to re-upload modified bytes even when VRAM is full (`VICTORY_REUPLOAD_WHEN_FULL=1` by default) — lighting the first room with its walls and character textures from the very first launch at **3–5 fps**.
-- **6–8 GB Laptop VRAM Spill & +160 Shaders (`fxceless PR #601`)**: spills bindless textures into shared system memory when 8 GB VRAM fills (`VICTORY_TEXTURE_SPILL=1`), waits on pending compute pipelines instead of dropping dispatches (`VICTORY_COMPUTE_WAIT=1`), guards Windows commit memory (`VICTORY_PIPELINE_COMMIT_MB`), unlocks **52/52** `XboxBvhBuilder.dll` shaders on 32-lane NVIDIA GPUs (`lane_uniform` + `lds_settled`), and adds lone first-half interpolation fallback (**14,199 / 14,247** VS/PS = **99.66%** emitted).
-- **NVIDIA 32-lane Wave64 & Shader Fixes (`fxceless PR #592`, `#146`, `#638`, `#639`)**: unlocks `sr_tracing:CS_Tiling_Generate_Opaque` (`#2cc4c197ee29e291`) as two 32-lane host waves on NVIDIA, lowers sparse `image_store` channel masks, `ds_sub_u32` LDS atomics, and `s_brev_b64`.
-- **195 merged Geometry Shaders (`#381`)** and **dual comparison/normal sampler slots (`#386`)**.
-- **`R9G9B9E5` render-target stand-in** (`R16G16B16A16_FLOAT`) and **2 irradiance cache shaders** unlocked (`194c736`, `fd021bf`).
-- **BCPack BC7 fix (`a68db08`)**: preserves all 32 indices in the first BC7 dictionary entry to prevent texture corruption.
-- **MIMG shader fixes (`c4335bb`, `130bf10`)**: fixes 3D Z texel offsets, `a16` offset truncation, and cubemap `sample_d` LOD.
-- **Intro video anti-flicker (`d9770b9`)**: eliminates shaking/flickering during boot video playback.
+### 1. Rendering, Shaders & Ray Tracing (`fxceless 3973179` + PRs `#854`, `#993`, `#994`, `#1006`, `#501`, `#632`, `#684`, `#238`)
+- **99.98% Shader Translation on NVIDIA 32-lane GPUs (`#854` + `#993`)**: paired wave64 execution on 32-lane hosts, mesh-to-pixel linking for >32 KiB mesh outputs (71 pedestrian/vehicle/prop mesh shaders), native **Geometry Shaders (195 programs)**, console-accurate loops, dispatches past 65,535 groups in X, and **100% of Pixel & Vertex shaders** passing (`12,067/12,067` PS, `2,192/2,192` VS).
+- **Live Ray Tracing Structure Builder (`#994`)**: dispatches `XboxBvhBuilder.dll` by thread counts (fixing multi-GB wild writes), makes raw-address title memory ready for BVH passes, and keeps node tests safe when toggled off (`VICTORY_BVH_BUILDER=0/1`).
+- **First Room Renders Right (`a26859f`, `8dd30ab`)**: mirrors byte-copied descriptor records (`VICTORY_HEAP_SYNC`, ~40,000/frame), gives unaligned buffer views their own copy (`VICTORY_VIEW_OWN_COPY`), guards every view of physical pages (`VICTORY_VIEW_GUARD`), opens guards on DirectStorage physical-page writes (`VICTORY_PAGE_WRITES`), and reserves VRAM for first-frame buffers and render targets.
+- **Levels on Demand (`VICTORY_LEVELS_ON_DEMAND=1`)**: allocates VRAM only for mip levels actually streamed in by the title — saving **~3.1 GB of VRAM** on RTX 4070 8 GB — paired with `#632` (stale unmapped checks no longer wipe freshly-written skin/face texture views) and `#1006` (`code_dword` table start fix saving GBs of NVIDIA VRAM).
+- **Pipeline & Descriptor Correctness**: `#501` disables blending on integer render targets (`R8_UINT`, fixing the refused mesh pipeline `f5e50eb2108c425b`), `#684` fixes 32-bit integer typed buffer views, `#238` zeroes blend/depth-stencil/stream padding for reliable D3D12 pipeline-library hits, and Depth Bounds Test (`#82`) illuminates room lamps cleanly.
 
-### 2. NVIDIA RTX 8 GB Stability & Shader Translator
-- **Anti-TDR loop bound (`LOOP_LIMIT = 1 << 14`)**: prevents NVIDIA `DXGI_ERROR_DEVICE_HUNG` (`0x887A0006`) resets on long console shader loops.
-- **Helper-lane `v_readfirstlane` fix (`#1733`)**: helper lanes in pixel-shader waterfall loops read their own value instead of spinning to the loop limit (which previously stalled draws for 0.3–1.3 s each until `DEVICE_HUNG`).
-- **`v_interp_p2_f16` modifiers (`#1696`)**: properly applies `op_sel`, `omod`, and `clamp` in f32 before converting once to f16.
-- **`WaveSize(32)` scalar lane-mask join (`#387`)**: requests 32-lane wave size when a scalar join reads a lane mask.
-- **Descriptor-as-data unlocking (`lower.rs`, `707a579`)**: unlocks `PS_PuddleDetect` (3 pixel shaders) and `ShallowWaterSim:CS_MinTimestepReduce` — all **4/4** validated with `dxil.dll` and compiled to real D3D12 PSOs on RTX 4070.
-- **Real `GetDeviceRemovedReason` (`#928`)**: reports the actual host D3D12 device state instead of `E_NOTIMPL`.
-- **106 upstream `Marvisak/VIctory` PRs** integrated (including `#1180` decode-time opcode lookup `-4..8%` translation time, `#1476` MD5 table, `#1471` dead phi latch folding, `#1443` RDNA2 quadmask, `#1366` native mesh outputs, `#1337` aniso mip point, `#1695` waterfall device checks, and `#52` thread-safe `SHADER_HEAPS` descriptor mirroring).
-
-### 3. Missing Walls, Memory & Performance
-- **Root-cause fix for missing prison walls (`562cf33` + `80d58f8`)**: DirectStorage writes to physical pages through temporary views that bypass Windows write-watch and memory guards; enabling `VICTORY_DSTORAGE_NOTIFY=1` notifies the GPU side of mapped destinations using a section-indexed view map so streamed room geometry appears reliably.
-- **Async relay correctness (`#191` + `#206`)**: waits on in-flight writes for aliased copies/readbacks (fixing missing skin under `VICTORY_RELAY=2`) and includes uncopied pages in shadow stale/merge (fixing transparent prison walls/ceilings).
-- **Safe `late waits` memory placement (`59d53a2` + `dd202bc`)**: refuses in-place placement under `late waits` and unlocks exact locked page ranges.
-- **Dedicated D3D12 `COPY` queue & parallel `CARD_COMPARE` (`5e758c7`)**: offloads card-buffer readbacks from the direct graphics queue (cutting card-piece fetch stalls from ~343 ms to ~24 ms).
-- **AVX2 SIMD relay merge (`#384`)**, **bounded VRAM diff uploads (`#391`)**, **placed-texture VRAM deduplication (`c96b4f2`)**, and **`VICTORY_TEXTURE_NO_WAIT` enabled by default (`#393`)**.
-- **Optional `xg_xs.dll` local oracle (`784c033`)**: supports `VICTORY_XG_DLL=<path>` + `VICTORY_XG_MODE=real` for hardware-exact texture tiling calculations when supplied by the user.
+### 2. Frame Rate Breakthrough (1–2 fps → 7–9.6 fps on RTX 4070)
+- **Dedicated Async Submit & Copy Queue (`f85101b`, `a253706`, `0b0074e`, `3973179`)**: `VICTORY_ASYNC_SUBMIT=1`, `VICTORY_QUEUE2=1`, `VICTORY_RELAY=1`, `VICTORY_JOIN_PARTS=1` (29 → 9 submissions/frame), `VICTORY_BACK_OWN_VIEW=1`, `VICTORY_COPY_PLAIN=1`, `VICTORY_TEXTURE_NO_WAIT=1`, and P-core pinning (`VICTORY_FAST_CORES`).
+- **Safe Indirect Draw Windows (`VICTORY_INDIRECT_WINDOW=1`) + Anti-TDR `VICTORY_DRIVER_WATCH`**: accelerates indirect draw bursts while watching the Windows display driver event log and automatically disabling draw windows ahead of any potential TDR/device loss.
+- **Fast Descriptor Heap Sync & Write-Watch (`9376fd6`, `#670`)**: cuts descriptor sync from `70–220 ms` to **~3 ms/frame** via per-slot fingerprinting and skips ~3,600 failing kernel write-watch calls/frame.
+- **Pipeline Worker Unblocking**: tuned `VICTORY_PIPELINE_COMMIT_MB=768` and `VICTORY_PIPELINE_WAIT_MS=1000` for 16 GB RAM hosts so background pipeline workers never stall during cutscene transitions, backed by full `shaders.rpf` pre-warming.
 
 ### 4. VIce Studio v4 Launcher (`launcher/studio/`)
 - **Sleek GTA 6 sunset glassmorphism UI** with generated neon **VIce Studio** emblem (`launcher/studio/studio-emblem.png`) and skippable 2-second cinematic startup intro.

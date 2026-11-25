@@ -506,10 +506,18 @@ select:focus,input:focus{border-color:var(--accent)}
         <select id="opt-version"><option value="victory.exe">victory.exe</option></select>
       </div>
 
+      <div class="row">
+        <div class="row-label">
+          <strong data-i18n="rt_label">Ray Tracing (BVH)</strong>
+          <small data-i18n="rt_hint">Éclairage indirect en direct (désactiver pour +FPS)</small>
+        </div>
+        <label class="switch"><input id="opt-rt" type="checkbox" checked><span class="slider"></span></label>
+      </div>
+
       <div class="row dev-only">
         <div class="row-label">
           <strong data-i18n="fast_gpu_label">Accélération GPU RTX</strong>
-          <small data-i18n="fast_gpu_hint">Relais async, file COPY, buffers 1–768 Mo</small>
+          <small data-i18n="fast_gpu_hint">Levels-on-demand, async submit, file COPY, indirect window</small>
         </div>
         <label class="switch"><input id="opt-fast" type="checkbox" checked><span class="slider"></span></label>
       </div>
@@ -647,9 +655,11 @@ const I18N = {
     nav_settings: "Paramètres",
     console_label: "Console cible",
     console_hint: "Profil de compatibilité (Xbox Series X recommandé)",
+    rt_label: "Ray Tracing (BVH)",
+    rt_hint: "Éclairage indirect en direct (désactiver pour +FPS)",
     version_label: "Version du moteur",
     fast_gpu_label: "Accélération GPU RTX",
-    fast_gpu_hint: "Relais async, file COPY, buffers 1–768 Mo",
+    fast_gpu_hint: "Levels-on-demand, async submit, file COPY, indirect window",
     dstorage_label: "Fix murs DirectStorage",
     dstorage_hint: "Notifie le GPU après le streaming des décors",
     opt_debug: "Debug D3D12",
@@ -741,9 +751,11 @@ const I18N = {
     nav_settings: "Settings",
     console_label: "Target console",
     console_hint: "Compatibility profile (Xbox Series X recommended)",
+    rt_label: "Ray Tracing (BVH)",
+    rt_hint: "Live indirect lighting (disable for higher FPS)",
     version_label: "Engine build",
     fast_gpu_label: "RTX GPU Acceleration",
-    fast_gpu_hint: "Async relay, COPY queue, 1–768 MB card buffers",
+    fast_gpu_hint: "Levels-on-demand, async submit, COPY queue, indirect window",
     dstorage_label: "DirectStorage Wall Fix",
     dstorage_hint: "Notifies the GPU after physical-page streaming",
     opt_debug: "D3D12 Debug",
@@ -847,6 +859,7 @@ function loadPrefs() {
     const p = JSON.parse(localStorage.getItem(PREF_KEY) || "{}");
     if (p.lang === "fr" || p.lang === "en") lang = p.lang;
     if (p.console) $("opt-console").value = p.console;
+    if (typeof p.bvhBuilder === "boolean") $("opt-rt").checked = p.bvhBuilder;
     if (typeof p.fastGpu === "boolean") $("opt-fast").checked = p.fastGpu;
     if (typeof p.dstorageNotify === "boolean") $("opt-dstorage").checked = p.dstorageNotify;
   } catch {}
@@ -856,6 +869,7 @@ function savePrefs() {
     localStorage.setItem(PREF_KEY, JSON.stringify({
       lang,
       console: $("opt-console").value,
+      bvhBuilder: $("opt-rt").checked,
       fastGpu: $("opt-fast").checked,
       dstorageNotify: $("opt-dstorage").checked,
     }));
@@ -886,7 +900,7 @@ function applyLanguage(newLang) {
 
 document.querySelectorAll(".lang-btn").forEach(b => b.onclick = () => applyLanguage(b.dataset.lang));
 $("opt-lang").onchange = () => applyLanguage($("opt-lang").value);
-["opt-console","opt-fast","opt-dstorage"].forEach(id => $(id).addEventListener("change", savePrefs));
+["opt-console","opt-rt","opt-fast","opt-dstorage"].forEach(id => $(id).addEventListener("change", savePrefs));
 loadPrefs();
 
 // Intro cinématique d'ouverture
@@ -1213,6 +1227,7 @@ $("btn-play").onclick = async () => {
         body: JSON.stringify({
           version: $("opt-version").value,
           console: $("opt-console").value,
+          bvhBuilder: $("opt-rt").checked,
           fastGpu: $("opt-fast").checked,
           dstorageNotify: $("opt-dstorage").checked,
           debug: developer && $("opt-debug").checked,
