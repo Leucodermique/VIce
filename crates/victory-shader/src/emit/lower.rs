@@ -107,6 +107,9 @@ pub(crate) struct Lowered {
     /// Whether the program uses wave operations.
     #[cfg(test)]
     pub wave_ops: bool,
+    /// Functions declared in the emitted DXIL module.
+    #[cfg(test)]
+    pub funcs: Vec<String>,
 }
 
 pub(crate) struct Parts<'a> {
@@ -2354,6 +2357,8 @@ impl<'a> Lower<'a> {
             nonuniform_handles: self.s.nonuniform_handles,
             #[cfg(test)]
             wave_ops: self.s.flags & flags::WAVE_OPS != 0,
+            #[cfg(test)]
+            funcs: self.s.m.func_names(),
             dxil: self.s.finish(),
             user_data,
             samplers: self.samplers,
@@ -3691,6 +3696,36 @@ impl<'a> Lower<'a> {
         self.s.m.select(c, z, zero, m)
     }
 
+    /// Flushes f32 subnormals to signed zero, keeping all other values and
+    /// the sign of zero intact.
+    fn ftz(&mut self, x: V) -> V {
+        let c = self.cur;
+        let bits = self.as_int(x);
+        let exp_mask = self.s.m.i32(0x7F80_0000);
+        let sign_mask = self.s.m.i32(0x8000_0000);
+        let zero = self.s.m.i32(0);
+        let exp = self.s.m.bin(c, Bin::And, bits, exp_mask);
+        let sub = self.s.m.cmp(c, pred::EQ, exp, zero);
+        let signed_zero = self.s.m.bin(c, Bin::And, bits, sign_mask);
+        let flushed = self.s.m.select(c, sub, signed_zero, bits);
+        self.as_float(flushed)
+    }
+
+    /// A legacy multiply-add as RDNA 2 runs it: fused (`v_fma_legacy_f32`),
+    /// with the legacy rule that a zero factor makes the product a +0 rather
+    /// than turning an infinite or NaN factor into a NaN.
+    fn legacy_fmad(&mut self, a: V, b: V, c: V) -> V {
+        let cur = self.cur;
+        let fused = self.fmad(a, b, c);
+        let zero = self.s.m.f32(0);
+        let az = self.s.m.cmp(cur, pred::OEQ, a, zero);
+        let bz = self.s.m.cmp(cur, pred::OEQ, b, zero);
+        let z = self.s.m.bin(cur, Bin::Or, az, bz);
+        // +0 + c, so the sign of a zero addend follows the addition.
+        let addend = self.s.m.bin(cur, Bin::Add, zero, c);
+        self.s.m.select(cur, z, addend, fused)
+    }
+
     // ---- lane booleans ----
 
     fn boolean(&mut self, b: Bool, at: usize) -> Result<V, Why> {
@@ -4052,6 +4087,10 @@ impl<'a> Lower<'a> {
         } else {
             self.s.op(at, "waveGetLaneIndex", Attr::ReadOnly, self.s.t.i32, 111, &[])
         };
+        self.lane_bit_at(at, lane, lo, hi)
+    }
+
+    fn lane_bit_at(&mut self, at: usize, lane: V, lo: V, hi: Option<V>) -> V {
         let (k31, k32, one, z) = (
             self.s.m.i32(31),
             self.s.m.i32(32),
@@ -4568,6 +4607,36 @@ impl<'a> Lower<'a> {
         r
     }
 
+    /// Whether a read of another lane of this lane's quad must reach helper
+    /// lanes: in a pixel shader, always. At a triangle's edge the quad's
+    /// other pixels are helpers (and so are discarded ones), which only quad
+    /// reads see: wave reads leave helper lanes out, so a derivative taken
+    /// by hand at a triangle's edge can misread or return zero there.
+    fn helpers_read(&self, quad: bool) -> bool {
+        quad && self.s.pixel
+    }
+
+    /// `v_readfirstlane_b32`'s result `first` of `own` in a pixel shader:
+    /// a helper lane takes its own value instead.
+    ///
+    /// On the console, whole-quad mode puts helper lanes in EXEC, so a
+    /// waterfall loop serves helper lanes too. On the host, wave
+    /// operations leave helper lanes out: once only helper lanes are left
+    /// in such a loop, `WaveReadLaneFirst` reads no lane, no lane matches,
+    /// and the loop runs to `LOOP_LIMIT`. With its own value a helper
+    /// lane matches in the first pass and leaves; what a helper lane
+    /// computes only feeds derivatives, and its stores are dropped.
+    fn helper_reads_own(&mut self, own: V, first: V) -> V {
+        if !self.s.pixel {
+            return first;
+        }
+        let c = self.cur;
+        let helper = self
+            .s
+            .op(c, "isHelperLane.i1", Attr::ReadOnly, self.s.t.i1, 221, &[]);
+        self.s.m.select(c, helper, own, first)
+    }
+
     /// `x` in the first lane of this host wave where `guard` holds, and whether it has such a
     /// lane: the console reads the first lane of EXEC, and a lane that got here with EXEC clear
     /// (a guard, not a branch) is not one. With none, `x` of the wave's first lane here.
@@ -4717,8 +4786,29 @@ impl<'a> Lower<'a> {
                 let t = self.s.m.bin(c, Bin::Or, t, or);
                 self.s.m.bin(c, Bin::Xor, t, xor)
             };
-            let r = if mesh_quad {
+            let r = if mesh_quad || self.helpers_read(quad) {
                 self.quad_pick(x, src)
+            } else if self.s.threads.is_some()
+                && self.s.mesh.is_none()
+                && self.exchange.is_none()
+            {
+                // A console lane sends a swizzle value only when its EXEC
+                // bit is set. Ballot the guard over the host lanes present
+                // here so absent lanes and lanes masked by EXEC both read as zero.
+                let on = guard.unwrap_or_else(|| self.s.m.bool(true));
+                let i32t = self.s.t.i32;
+                let four = self.s.m.named_struct("dx.types.fouri32", vec![i32t; 4]);
+                let ballot = self
+                    .s
+                    .op(c, "waveActiveBallot", Attr::NoUnwind, four, 116, &[on]);
+                let lo = self.s.m.extract(c, ballot, 0);
+                let hi = self.x.native.wave64.then(|| self.s.m.extract(c, ballot, 1));
+                let active = self.lane_bit_at(c, src, lo, hi);
+                // Keep the DXIL read defined even for an inactive source.
+                let src = self.s.m.select(c, active, src, lane);
+                let read = self.read_lane(x, src);
+                let zero = self.s.m.i32(0);
+                self.s.m.select(c, active, read, zero)
             } else {
                 self.read_lane(x, src)
             };
@@ -6887,7 +6977,7 @@ impl<'a> Lower<'a> {
                 (src, inside, masks, bound_ctrl)
             }
         };
-        let mut r = if mesh_quad {
+        let mut r = if mesh_quad || self.helpers_read(quad) {
             self.quad_pick(x, src)
         } else {
             self.read_lane(x, src)
@@ -7321,21 +7411,26 @@ impl<'a> Lower<'a> {
                         let m = self.s.m.bin(c, Bin::Mul, a, bb);
                         self.s.m.bin(c, Bin::Add, m, acc)
                     }
+                    // On RDNA 2 the legacy encoding decodes as fused
+                    // (`v_fma_legacy_f32`) and flushes its sources; the
+                    // zero-factor rule of the legacy multiply comes with it.
                     _ => {
-                        let m = self.legacy_mul(a, bb);
-                        self.s.m.bin(c, Bin::Add, m, acc)
+                        let (a, bb, acc) = (self.ftz(a), self.ftz(bb), self.ftz(acc));
+                        self.legacy_fmad(a, bb, acc)
                     }
                 };
                 float(self, r)
             }
-            "v_mad_f32" | "v_madak_f32" | "v_madmk_f32" | "v_mad_legacy_f32" => {
+            "v_mad_f32" | "v_madak_f32" | "v_madmk_f32" => {
                 let (a, bb, cc) = (f(self, 0)?, f(self, 1)?, f(self, 2)?);
-                let m = if name == "v_mad_legacy_f32" {
-                    self.legacy_mul(a, bb)
-                } else {
-                    self.s.m.bin(c, Bin::Mul, a, bb)
-                };
+                let m = self.s.m.bin(c, Bin::Mul, a, bb);
                 let r = self.s.m.bin(c, Bin::Add, m, cc);
+                float(self, r)
+            }
+            "v_mad_legacy_f32" => {
+                let (a, bb, cc) = (f(self, 0)?, f(self, 1)?, f(self, 2)?);
+                let (a, bb, cc) = (self.ftz(a), self.ftz(bb), self.ftz(cc));
+                let r = self.legacy_fmad(a, bb, cc);
                 float(self, r)
             }
             "v_max3_f32" | "v_min3_f32" | "v_med3_f32" => {
@@ -7766,7 +7861,8 @@ impl<'a> Lower<'a> {
                         // scalars this way, inside a loop whose exit is per console wave).
                         static OWN: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
                         if *OWN.get_or_init(|| std::env::var_os("VICTORY_FIRSTLANE_OWN").is_some_and(|v| v == "1")) {
-                            return int(self, mine);
+                            let r = self.helper_reads_own(a, mine);
+                            return int(self, r);
                         }
                         need(self.cur_ir);
                         return Err("a first-lane read where not every lane runs");
@@ -7800,6 +7896,7 @@ impl<'a> Lower<'a> {
                 } else {
                     mine
                 };
+                let r = self.helper_reads_own(a, r);
                 int(self, r)
             }
             _ => {
