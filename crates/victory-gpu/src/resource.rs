@@ -1160,6 +1160,10 @@ struct Hosted {
     /// When the host copy was last asked for (`crate::host::moment`),
     /// written under `made`'s lock.
     used: std::sync::atomic::AtomicU64,
+    /// When [`let_go_idle`] first saw this host copy unheld by any list or
+    /// descriptor slot (`0` while still held; prevents instant eviction of
+    /// long-lived scenery textures when a slot moves during camera cuts, #1080).
+    unheld_since: std::sync::atomic::AtomicU64,
     /// The host refused to make it: not tried again.
     refused: std::sync::atomic::AtomicBool,
     /// Its host copy was let go as idle once.
@@ -1510,6 +1514,7 @@ fn hosted(this: This, make: bool) -> Option<Made> {
         crate::descriptor::texture_made(this as usize);
     }
     r.host.used.store(crate::host::moment(), Relaxed);
+    r.host.unheld_since.store(0, Relaxed);
     made.clone()
 }
 
@@ -1915,7 +1920,7 @@ pub(crate) fn let_go_idle() {
     if !sweeping() {
         return;
     }
-    let idle_ms = crate::host::vram_idle_ms(crate::host::host().and_then(|h| h.video_memory()));
+    let idle_ms = crate::host::texture_idle_ms(crate::host::host().and_then(|h| h.video_memory()));
     // What the title unmapped since the last sweep ([`note_unmapped`]): a
     // placed texture filled from there has lost its source and goes now
     // rather than after the idle time.
@@ -1946,15 +1951,31 @@ pub(crate) fn let_go_idle() {
         };
         let gone = {
             let mut made = r.host.made.lock().unwrap_or_else(|e| e.into_inner());
-            let idle = made.as_ref().is_some_and(|(host, _)| {
-                (source_gone
-                    || crate::host::long_ago(r.host.used.load(Relaxed), idle_ms, IDLE_FRAMES))
-                    && std::sync::Arc::strong_count(host) == 1
+            let unheld = made.as_ref().is_some_and(|(host, _)| {
+                std::sync::Arc::strong_count(host) == 1
                     && crate::host::references(&host.texture) == 1
             });
+            let idle = if !unheld {
+                r.host.unheld_since.store(0, Relaxed);
+                false
+            } else if source_gone {
+                true
+            } else {
+                let since = match r.host.unheld_since.load(Relaxed) {
+                    0 => {
+                        let now = crate::host::moment();
+                        r.host.unheld_since.store(now, Relaxed);
+                        now
+                    }
+                    m => m,
+                };
+                crate::host::long_ago(r.host.used.load(Relaxed), idle_ms, IDLE_FRAMES)
+                    && crate::host::long_ago(since, idle_ms, IDLE_FRAMES)
+            };
             if idle {
                 // Under the lock: the next use must not find the staging
                 // state of the texture let go (it says "uploaded").
+                r.host.unheld_since.store(0, Relaxed);
                 crate::texture::unstage(at as This);
                 made.take()
             } else {
@@ -2579,6 +2600,7 @@ fn hand_out_resource(
             // then color or depth and stencil: 5 words) or null.
             clear: (!clear.is_null()).then(|| unsafe { clear.cast::<[u32; 5]>().read_unaligned() }),
             used: std::sync::atomic::AtomicU64::new(0),
+            unheld_since: std::sync::atomic::AtomicU64::new(0),
             refused: std::sync::atomic::AtomicBool::new(false),
             gone: std::sync::atomic::AtomicBool::new(false),
             placed: std::sync::atomic::AtomicBool::new(false),

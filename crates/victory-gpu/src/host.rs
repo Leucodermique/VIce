@@ -140,6 +140,36 @@ pub(crate) fn vram_idle_ms(video_memory: Option<[u64; 4]>) -> u64 {
     }
 }
 
+/// Effective idle timeout for title-filled texture host copies
+/// (`resource::let_go_idle`). Respects `VICTORY_TEXTURE_IDLE_MS` when set
+/// (scaled by VRAM pressure: full below 75%, half at 75..85%, fifth at
+/// >=85%, never below 1,000 ms), otherwise falls back to [`vram_idle_ms`].
+pub(crate) fn texture_idle_ms(video_memory: Option<[u64; 4]>) -> u64 {
+    static BASE_MS: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
+    let Some(base) = *BASE_MS.get_or_init(|| {
+        std::env::var("VICTORY_TEXTURE_IDLE_MS")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .map(|ms| ms.max(1_000))
+    }) else {
+        return vram_idle_ms(video_memory);
+    };
+    let Some([budget, used, ..]) = video_memory else {
+        return base;
+    };
+    if budget == 0 {
+        return base;
+    }
+    let used_pct = (u128::from(used) * 100) / u128::from(budget);
+    if used_pct >= 85 {
+        (base / 5).max(1_000)
+    } else if used_pct >= 75 {
+        (base / 2).max(1_000)
+    } else {
+        base
+    }
+}
+
 /// Effective idle timeout (in milliseconds) for system-RAM caches (staging
 /// buffers, loose shadows, and the mapped pipeline library), scaled down
 /// when free physical RAM is low. Never returns less than 2,000 ms.
