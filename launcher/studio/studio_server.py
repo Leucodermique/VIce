@@ -587,6 +587,8 @@ def launch_game(cfg, developer):
         env["VICTORY_TEXTURE_DROP_MIPS"] = "1"
         env["VICTORY_TEXTURE_BACK"] = "1"
         env["VICTORY_RELAY"] = "2"
+        env["VICTORY_FILL_WAIT"] = "1"
+        env["VICTORY_SECTION_MB"] = "2"
         env["VICTORY_ASYNC_SUBMIT"] = "1"
         env["VICTORY_ASYNC_PRESENT"] = "1"
         env["VICTORY_LAND_ASIDE"] = "1"
@@ -656,7 +658,7 @@ def launch_game(cfg, developer):
         env["VICTORY_PIPELINE_WAIT_MS"] = "500"
 
     env["VICTORY_BVH_BUILDER"] = "1" if bvh_builder else "0"
-    env["VICTORY_PAGE_WRITES"] = "1" if dstorage_notify else "0"
+    env["VICTORY_PAGE_WRITES"] = "all" if dstorage_notify else "0"
     env["VICTORY_DSTORAGE_NOTIFY"] = "1" if dstorage_notify else "0"
 
     for env_key, opt_key in (
@@ -752,7 +754,7 @@ def launch_game(cfg, developer):
                     f"Engine: {engine}",
                     f"Engine build: {datetime.fromtimestamp(engine.stat().st_mtime).isoformat(timespec='seconds')}",
                     f"Console: {console} | FastGPU: {int(fast_gpu)} | DStorageNotify: {int(dstorage_notify)} | BVH: {int(bvh_builder)}",
-                    f"GPU opts: Res={env.get('VICTORY_RESOLUTION', 'native')} | DropMips={env.get('VICTORY_TEXTURE_DROP_MIPS', '0')}/Catchup={env.get('VICTORY_TEXTURE_CATCHUP', '1')}/Stage={env.get('VICTORY_TEXTURE_STAGE_MB', '192')}MB@{env.get('VICTORY_TEXTURE_STAGE_MS', '250')}ms/Early={env.get('VICTORY_EARLY_TEXTURES_MS', '12')}ms/Bake={env.get('VICTORY_BAKE_TEXTURES_MS', '1500')}ms/Idle={env.get('VICTORY_TEXTURE_IDLE_MS', '5000')}ms/Spill={env.get('VICTORY_TEXTURE_SPILL_PERCENT', '10')}% | TexBack={env.get('VICTORY_TEXTURE_BACK', '0')} | Relay={env.get('VICTORY_RELAY', '0')}/Async={env.get('VICTORY_ASYNC_SUBMIT', '0')}/APres={env.get('VICTORY_ASYNC_PRESENT', '0')}/LandAside={env.get('VICTORY_LAND_ASIDE', '0')}/Spread={env.get('VICTORY_HEAP_RESCAN_SPREAD', '0')}/Q2={env.get('VICTORY_QUEUE2', '0')} | CardBuf={env.get('VICTORY_CARD_BUFFERS_MB')}MB(min={env.get('VICTORY_CARD_BUFFERS_MIN_KB', '1024')}KB) | SkipWC={env.get('VICTORY_SKIP_WC_COMPARE', '0')} | Ambient={env.get('VICTORY_AMBIENT', 'off')}",
+                    f"GPU opts: Res={env.get('VICTORY_RESOLUTION', 'native')} | DropMips={env.get('VICTORY_TEXTURE_DROP_MIPS', '0')}/Catchup={env.get('VICTORY_TEXTURE_CATCHUP', '1')}/Stage={env.get('VICTORY_TEXTURE_STAGE_MB', '192')}MB@{env.get('VICTORY_TEXTURE_STAGE_MS', '250')}ms/Early={env.get('VICTORY_EARLY_TEXTURES_MS', '12')}ms/Bake={env.get('VICTORY_BAKE_TEXTURES_MS', '1500')}ms/Idle={env.get('VICTORY_TEXTURE_IDLE_MS', '5000')}ms/Spill={env.get('VICTORY_TEXTURE_SPILL_PERCENT', '10')}% | TexBack={env.get('VICTORY_TEXTURE_BACK', '0')} | Relay={env.get('VICTORY_RELAY', '0')}/FillWait={env.get('VICTORY_FILL_WAIT', '0')}/SecMB={env.get('VICTORY_SECTION_MB', '2')}/PageWrites={env.get('VICTORY_PAGE_WRITES', '0')}/Async={env.get('VICTORY_ASYNC_SUBMIT', '0')}/APres={env.get('VICTORY_ASYNC_PRESENT', '0')}/LandAside={env.get('VICTORY_LAND_ASIDE', '0')}/Spread={env.get('VICTORY_HEAP_RESCAN_SPREAD', '0')}/Q2={env.get('VICTORY_QUEUE2', '0')} | CardBuf={env.get('VICTORY_CARD_BUFFERS_MB')}MB(min={env.get('VICTORY_CARD_BUFFERS_MIN_KB', '1024')}KB) | SkipWC={env.get('VICTORY_SKIP_WC_COMPARE', '0')} | Ambient={env.get('VICTORY_AMBIENT', 'off')}",
                     f"Direct3D debug: {env.get('VICTORY_D3D12_DEBUG', '0')} | Surface: {env.get('VICE_SURFACE_STATS', '0')} | WARP: {env.get('VICTORY_D3D12_WARP', '0')}",
                 ]
                 for h in header:
