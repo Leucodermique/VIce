@@ -901,7 +901,6 @@ fn unmap(physical: &mut Physical, base: usize, len: usize) {
                 }
             }
         }
-        victory_gpu::title_memory_remapped(at, size);
         // SAFETY: a view we mapped; it becomes a placeholder again.
         unsafe {
             UnmapViewOfFile2(
@@ -912,6 +911,9 @@ fn unmap(physical: &mut Physical, base: usize, len: usize) {
                 MEM_PRESERVE_PLACEHOLDER,
             )
         };
+        // Told once the view is gone (#1005): a GPU copy that guarded it in
+        // between would otherwise keep it clean, or leave a read-only orphan.
+        victory_gpu::title_memory_remapped(at, size);
         if at < base {
             map(physical, at, base - at, slice.clone());
         }

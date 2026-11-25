@@ -1431,13 +1431,31 @@ pub(crate) fn room() -> bool {
     if filled < FLOOR {
         return true;
     }
+    // Past the card's own memory, spill into shared system memory on 6-8 GB cards
+    // (`VICTORY_TEXTURE_SPILL=0` disables; `VICTORY_TEXTURE_SPILL_PERCENT`, default 55,
+    // caps shared use so Windows commit stays healthy on 16 GB RAM machines while
+    // unlocking the ~9,000-20,000 skin/face/wall textures that otherwise stall).
+    static SPILL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let spill = *SPILL.get_or_init(|| std::env::var_os("VICTORY_TEXTURE_SPILL").is_none_or(|v| v != "0"));
+    static SPILL_PERCENT: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    let spill_pct = *SPILL_PERCENT.get_or_init(|| {
+        std::env::var("VICTORY_TEXTURE_SPILL_PERCENT")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .map_or(55, |p| p.clamp(0, 90))
+    });
     match crate::host::host().and_then(|h| h.video_memory()) {
         // What is kept for card copies of title buffers not made yet
         // (`crate::shadow::card_room_kept`) and for the render targets a
         // world makes in its first frame ([`targets_room_kept`]) counts as
         // used.
-        Some([budget, used, ..]) => {
+        Some([budget, used, ..]) if !spill => {
             used + crate::shadow::card_room_kept() + targets_room_kept() < budget / 100 * room_percent()
+        }
+        Some([budget, used, shared_budget, shared_used]) => {
+            let own = budget / 100 * room_percent();
+            let reserved = crate::shadow::card_room_kept() + targets_room_kept();
+            used + reserved < own || used + reserved + shared_used < own + shared_budget / 100 * spill_pct
         }
         None => filled < WITHOUT_BUDGET,
     }

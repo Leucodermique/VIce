@@ -1123,9 +1123,17 @@ pub fn title_memory_remapped(at: usize, len: usize) {
         g.absent.remove(&block);
     }
     let blocks: Vec<usize> = g.protected.range(range).copied().collect();
-    for block in blocks {
-        g.protected.remove(&block);
-        g.clean.remove(&block);
+    if !blocks.is_empty() {
+        use windows_sys::Win32::System::Memory::{PAGE_READWRITE, VirtualProtect};
+        let mut old = 0u32;
+        for block in blocks {
+            // SAFETY: if the block is still mapped (partial unmap / remap race),
+            // restore PAGE_READWRITE before forgetting it so writes cannot hit
+            // an orphaned read-only page; VirtualProtect fails harmlessly if unmapped.
+            unsafe { VirtualProtect((block * BLOCK) as *const _, BLOCK, PAGE_READWRITE, &mut old) };
+            g.protected.remove(&block);
+            g.clean.remove(&block);
+        }
     }
     let aliased: Vec<usize> = g.aliased.range(at / BLOCK..at.saturating_add(len).div_ceil(BLOCK)).copied().collect();
     for block in aliased {
