@@ -565,13 +565,17 @@ def launch_game(cfg, developer):
     bvh_builder = bool(cfg.get("bvhBuilder", False))
 
     if fast_gpu:
-        # RTX 4070 Laptop 8 GB / 16 GB RAM optimal balance (verified by play.log):
-        # - Series X + VICTORY_RESOLUTION=1920x1080 + DROP_MIPS=2 stays ~5.3/8 GB VRAM (DROP_MIPS=1 hit VRAM cap "no room for new ones")
-        # - ASYNC_SUBMIT=1 + QUEUE2=1 + SKIP_WC_COMPARE=1 cut copy-back from 26 ms -> 5.8 ms (2.8 MB)
-        # - CARD_BUFFERS_MB=768 + CARD_BUFFERS_MIN_KB=256 cut CPU buffer scans from 76 MB -> 7.1 MB without starving texture VRAM
-        # - HEAP_WORKER=0 (main-thread texture pass is only 2.3 ms with DROP_MIPS=2 vs 145 ms worker contention)
-        # - INDIRECT_GATHER=1 + INDIRECT_WINDOW_DRAWS=1 + CLAMP_WAITS=0 + ALIAS_ONCE=1 + GUARD_HOLES_FRAME=1 + WIDE_TEXTURES=1
+        # RTX 4070 Laptop 8 GB / 16 GB RAM — 3D Visual Fidelity & Zero-Freeze profile:
+        # - DROP_MIPS=1 (4x sharper scenery/NPCs vs DROP_MIPS=2) + TEXTURE_CATCHUP=1 + STAGE_MS=180 + EARLY_TEXTURES_MS=30
+        #   so all ~20k scene textures finish streaming quickly without blurry/missing surfaces.
+        # - CARD_BUFFERS_MB=512 + ROOM_PERCENT=94 + SPILL_PERCENT=25 (~1.8 GB safe shared-RAM headroom)
+        #   prevents "no room for new ones" while staying far below 16 GB RAM OOM limits.
+        # - TEXTURE_BACK=1 (#999/#1152 water readback) + SKIP_WC_COMPARE=0 (no stale-byte artifacts) + COPY_PLAIN off (fixes 68 MB CPU copy spike).
+        # - LAND_ASIDE=1 (#1146) + HEAP_RESCAN_SPREAD=1 (#1138) + RELAY=2 + ASYNC_SUBMIT=1 + ASYNC_PRESENT=1 + QUEUE2=1 eliminate frame stalls.
+        # - VICTORY_AUTO_QUARTER left unset (no XXL zoom on 2D profile menu).
         env.pop("VICTORY_LEVELS_ON_DEMAND", None)
+        env.pop("VICTORY_COPY_PLAIN", None)
+        env.pop("VICTORY_AUTO_QUARTER", None)
         if console == "series-x":
             env["VICTORY_RESOLUTION"] = "1920x1080"
             env["VICTORY_DISPLAY_MODE"] = "1920x1080"
@@ -579,12 +583,14 @@ def launch_game(cfg, developer):
             env.pop("VICTORY_RESOLUTION", None)
             env.pop("VICTORY_DISPLAY_MODE", None)
         env["VICTORY_AMBIENT"] = "off" if bvh_builder else "0.45"
-        env["VICTORY_TEXTURE_DROP_MIPS"] = "2"
+        env["VICTORY_TEXTURE_DROP_MIPS"] = "1"
+        env["VICTORY_TEXTURE_BACK"] = "1"
         env["VICTORY_RELAY"] = "2"
         env["VICTORY_ASYNC_SUBMIT"] = "1"
         env["VICTORY_ASYNC_PRESENT"] = "1"
+        env["VICTORY_LAND_ASIDE"] = "1"
+        env["VICTORY_HEAP_RESCAN_SPREAD"] = "1"
         env["VICTORY_QUEUE2"] = "1"
-        env["VICTORY_COPY_PLAIN"] = "1"
         env["VICTORY_DISK_CORES"] = "slow"
         env["VICTORY_INDIRECT_WINDOW"] = "1"
         env["VICTORY_INDIRECT_WINDOW_DRAWS"] = "1"
@@ -593,25 +599,27 @@ def launch_game(cfg, developer):
         env["VICTORY_JOIN_PARTS"] = "1"
         env["VICTORY_BACK_OWN_VIEW"] = "1"
         env["VICTORY_ALIAS_ONCE"] = "1"
-        env["VICTORY_SKIP_WC_COMPARE"] = "1"
+        env["VICTORY_SKIP_WC_COMPARE"] = "0"
         env["VICTORY_WIDE_TEXTURES"] = "1"
         env["VICTORY_GUARD_HOLES_FRAME"] = "1"
         env["VICTORY_HEAP_WORKER"] = "0"
         env["VICTORY_XMEM_PERSISTENT_VIEW"] = "1"
         env["VICTORY_TEXTURE_NO_WAIT"] = "1"
-        env["VICTORY_TEXTURE_CATCHUP"] = "0"
-        env["VICTORY_TEXTURE_STAGE_MS"] = "36"
+        env["VICTORY_TEXTURE_CATCHUP"] = "1"
+        env["VICTORY_TEXTURE_STAGE_MS"] = "180"
+        env["VICTORY_EARLY_TEXTURES_MS"] = "30"
         env["VICTORY_WIDE_BACK"] = "1"
         env["VICTORY_CARD_REHASH_RUNS"] = "1"
         env["VICTORY_LATE_WAIT_LISTS"] = "512"
         env["VICTORY_CARD_BUFFERS_MIN_MB"] = "1"
         env["VICTORY_CARD_BUFFERS_MIN_KB"] = "256"
-        env["VICTORY_CARD_BUFFERS_MB"] = "768"
+        env["VICTORY_CARD_BUFFERS_MB"] = "512"
         env["VICTORY_CARD_WINDOWS_MB"] = "384"
         env["VICTORY_WINDOW_KB"] = "1024"
         env["VICTORY_WINDOW_TAILS"] = "1"
         env["VICTORY_TEXTURE_ROOM_PERCENT"] = "94"
-        env["VICTORY_TEXTURE_SPILL_PERCENT"] = "0"
+        env["VICTORY_TEXTURE_SPILL"] = "1"
+        env["VICTORY_TEXTURE_SPILL_PERCENT"] = "25"
         env["VICTORY_CARD_ROOM_FOR_TARGETS_MB"] = "1024"
         env["VICTORY_PIPELINE_COMMIT_MB"] = "768"
         env["VICTORY_PIPELINE_WAIT_MS"] = "500"
@@ -741,7 +749,7 @@ def launch_game(cfg, developer):
                     f"Engine: {engine}",
                     f"Engine build: {datetime.fromtimestamp(engine.stat().st_mtime).isoformat(timespec='seconds')}",
                     f"Console: {console} | FastGPU: {int(fast_gpu)} | DStorageNotify: {int(dstorage_notify)} | BVH: {int(bvh_builder)}",
-                    f"GPU opts: Res={env.get('VICTORY_RESOLUTION', 'native')} | DropMips={env.get('VICTORY_TEXTURE_DROP_MIPS', '0')} | Relay={env.get('VICTORY_RELAY', '0')}/Async={env.get('VICTORY_ASYNC_SUBMIT', '0')}/APres={env.get('VICTORY_ASYNC_PRESENT', '0')}/Q2={env.get('VICTORY_QUEUE2', '0')}/Plain={env.get('VICTORY_COPY_PLAIN', '0')} | CardBuf={env.get('VICTORY_CARD_BUFFERS_MB')}MB(min={env.get('VICTORY_CARD_BUFFERS_MIN_KB', '1024')}KB) | Gather={env.get('VICTORY_INDIRECT_GATHER', '0')} | SkipWC={env.get('VICTORY_SKIP_WC_COMPARE', '0')} | Ambient={env.get('VICTORY_AMBIENT', 'off')}",
+                    f"GPU opts: Res={env.get('VICTORY_RESOLUTION', 'native')} | DropMips={env.get('VICTORY_TEXTURE_DROP_MIPS', '0')}/Catchup={env.get('VICTORY_TEXTURE_CATCHUP', '1')}/Stage={env.get('VICTORY_TEXTURE_STAGE_MS', '250')}ms/Spill={env.get('VICTORY_TEXTURE_SPILL_PERCENT', '10')}% | TexBack={env.get('VICTORY_TEXTURE_BACK', '0')} | Relay={env.get('VICTORY_RELAY', '0')}/Async={env.get('VICTORY_ASYNC_SUBMIT', '0')}/APres={env.get('VICTORY_ASYNC_PRESENT', '0')}/LandAside={env.get('VICTORY_LAND_ASIDE', '0')}/Spread={env.get('VICTORY_HEAP_RESCAN_SPREAD', '0')}/Q2={env.get('VICTORY_QUEUE2', '0')} | CardBuf={env.get('VICTORY_CARD_BUFFERS_MB')}MB(min={env.get('VICTORY_CARD_BUFFERS_MIN_KB', '1024')}KB) | SkipWC={env.get('VICTORY_SKIP_WC_COMPARE', '0')} | Ambient={env.get('VICTORY_AMBIENT', 'off')}",
                     f"Direct3D debug: {env.get('VICTORY_D3D12_DEBUG', '0')} | Surface: {env.get('VICE_SURFACE_STATS', '0')} | WARP: {env.get('VICTORY_D3D12_WARP', '0')}",
                 ]
                 for h in header:

@@ -2196,6 +2196,18 @@ impl HostHeap {
         for_draw: bool,
         record_change: bool,
     ) -> Option<(View, Option<BufferCopy>)> {
+        if index < self.count && heap_locks() {
+            // SAFETY: the handle is a descriptor slot in title memory.
+            let [tag, i, generation] = unsafe { (handle as *const [u32; 3]).read_unaligned() };
+            let key = u64::from(generation) << 32 | u64::from(i);
+            if tag == VIEW_TAG
+                && key != 0
+                && self.made_now[index as usize].load(std::sync::atomic::Ordering::Acquire) == key
+                && let Some(view) = view_at(i, generation)
+            {
+                return Some((view, None));
+            }
+        }
         let mut made = self.made.lock().unwrap_or_else(|e| e.into_inner());
         self.mirror_with_made(&mut made, index, handle, for_draw, record_change, None)
     }
@@ -2232,13 +2244,6 @@ impl HostHeap {
         // Generations start at 1, so a made slot's key is never 0.
         let key = u64::from(generation) << 32 | u64::from(i);
         let view = (tag == VIEW_TAG).then(|| view_at(i, generation)).flatten();
-        // Made from this record already: nothing to do, and no lock.
-        if heap_locks() && self.made_now[index as usize].load(std::sync::atomic::Ordering::Acquire) == key {
-            if let Some(view) = view {
-                return Some((view, None));
-            }
-        }
-        let mut made = self.made.lock().unwrap_or_else(|e| e.into_inner());
         let Some(view) = view else {
             // Not a view of ours (never written, or of a resource the
             // title released): nothing to read.
@@ -3465,19 +3470,28 @@ fn same_placed_texture(a: &View, b: &View) -> bool {
     }
 }
 
-/// A shader view of a texture the title placed in memory itself, as a view
-/// of the resource made for that memory (on first use).
+/// A shader or unordered access view of a texture the title placed in memory
+/// itself, as a view of the resource made for that memory (on first use).
 pub(crate) fn placed_texture(view: &View) -> Option<View> {
     const BUFFER: u32 = 1;
-    let View::Placed(false, resource, desc) = view else {
+    const ALLOW_UNORDERED_ACCESS: u32 = 0x4;
+    let View::Placed(unordered, resource, desc) = view else {
         return None;
     };
     if resource[0] == BUFFER {
         return None;
     }
     let address = u64::from(desc[10]) | u64::from(desc[11]) << 32;
-    let texture = crate::resource::texture_at(address, resource)?;
-    Some(View::Shader(texture as usize, desc[..10].try_into().ok()))
+    let mut res = *resource;
+    if *unordered {
+        res[12] |= ALLOW_UNORDERED_ACCESS;
+    }
+    let texture = crate::resource::texture_at(address, &res)?;
+    if *unordered {
+        Some(View::Unordered(texture as usize, 0, desc[..10].try_into().ok()))
+    } else {
+        Some(View::Shader(texture as usize, desc[..10].try_into().ok()))
+    }
 }
 
 /// A null view of the kind `view` is, for a slot whose view the host
@@ -4444,7 +4458,7 @@ void BY_FLOATS_OR_NOT(uint3 id : SV_DispatchThreadID) {
         assert_eq!(heap.mirror(slot, handle, true), Some(view));
         assert_eq!(super::device_removed(), None);
         let key = u64::from(generation) << 32 | u64::from(entry);
-        assert!(heap.kept.lock().unwrap()[slot as usize].is_some());
+        assert!(heap.kept[(slot / KEPT_PIECE) as usize].lock().unwrap()[(slot % KEPT_PIECE) as usize].is_some());
         assert!(!heap.texture_slot_gone(slot, observed));
         assert_eq!(heap.made.lock().unwrap()[slot as usize], key);
         assert_eq!(heap.texture_slots_due(u64::MAX, 1).0, [(slot, replacement)]);

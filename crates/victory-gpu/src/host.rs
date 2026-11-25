@@ -8580,9 +8580,11 @@ impl Host {
                 let format = swap_format(plane.GetDesc().Format)?;
                 Some((plane, D3D12_RESOURCE_STATES(was as i32), format))
             });
-            static RES_CAPPED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-            let res_capped = *RES_CAPPED.get_or_init(|| std::env::var_os("VICTORY_RESOLUTION").is_some());
-            let auto_quarter = res_capped
+            static AUTO_QUARTER_OPT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+            let auto_quarter_opt = *AUTO_QUARTER_OPT.get_or_init(|| {
+                std::env::var_os("VICTORY_AUTO_QUARTER").is_some_and(|v| v == "1")
+            });
+            let auto_quarter = auto_quarter_opt
                 && over.is_none()
                 && !read_now
                 && frame_draws <= 128
