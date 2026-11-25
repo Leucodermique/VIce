@@ -308,7 +308,8 @@ struct Lower<'a> {
 /// until the driver resets it. A lane that reaches the limit leaves the
 /// program as killed (a pixel discards).
 // shortcut: a genuine loop of more iterations than this is cut short too.
-pub(super) const LOOP_LIMIT: u32 = 1 << 20;
+// 2^14 bounds any runaway shader loop to milliseconds on NVIDIA (#1819, #1820).
+pub(super) const LOOP_LIMIT: u32 = 1 << 14;
 
 /// Lane masks read as numbers (`s_bcnt1`, `s_ff1`, `v_mbcnt`, scalar
 /// compares, bit tests) are ballots of the lanes' booleans, taken where the
@@ -5753,7 +5754,60 @@ impl<'a> Lower<'a> {
                 .find_map(|(s, _)| use_of(*s))
         };
         let use_at = use_of(site).or_else(twin);
-        let Some((at, first)) = use_at else {
+        let (src, used, uav, props, image) = if let Some((at, first)) = use_at {
+            let src = Source::Loaded { load: site, first };
+            let used = self.used_kind(&src);
+            let ui: &Inst = &self.x.p.blocks[at.0].insts[at.1];
+            let un = ui.name();
+            let uav = un.contains("store")
+                || un.contains("atomic")
+                || used.is_some_and(|u| u.kind == ResourceType::Uav);
+            let u = if uav { 0x1000 } else { 0 };
+            let (props, image) = match &ui.fields {
+                // A ray-tracing structure in a buffer of the host: read raw.
+                Fields::Image { .. } if un.starts_with("image_bvh") => ((11, 0), None),
+                Fields::Image { dim, .. } => {
+                    let kind = match dim {
+                        0 => 1,
+                        1 => 2,
+                        2 => 4,
+                        4 => 6,
+                        5 => 7,
+                        _ => return Err("an image dimension (cube or MSAA)"),
+                    };
+                    ((kind | u, 0x409), Some(kind))
+                }
+                Fields::Buffer { idxen, format, .. } => {
+                    let stride = used.map_or(0, |u| u.stride);
+                    let props = if un.starts_with("buffer_load_format")
+                        || un.starts_with("buffer_store_format")
+                    {
+                        (10 | u, 0x409)
+                    } else if *idxen && format.is_none() && stride >= 4 && stride.is_multiple_of(4)
+                    {
+                        (12 | u, stride)
+                    } else {
+                        (11 | u, 0)
+                    };
+                    if used.is_some_and(|u| u.kind == ResourceType::Cbv) {
+                        self.stale.extend(inst.writes.iter().map(|w| w.1));
+                        return Err("a constant buffer's descriptor read as data");
+                    }
+                    (props, None)
+                }
+                // Read by scalar buffer loads alone: the raw view `smem` reads it through.
+                Fields::Smem { .. } if used.is_some_and(|u| u.kind == ResourceType::Srv) => {
+                    ((11, 0), None)
+                }
+                // A constant buffer: nothing of its descriptor is a number.
+                Fields::Smem { .. } => {
+                    self.stale.extend(inst.writes.iter().map(|w| w.1));
+                    return Err("a constant buffer's descriptor read as data");
+                }
+                _ => return Err("a scalar memory read as data"),
+            };
+            (src, used, uav, props, image)
+        } else {
             // A descriptor kept per lane in VGPRs (`Resources::lane_copied`): the code only
             // copies its dwords and compares them, lane against first lane, and every load
             // that reaches those lanes reads one address. Each dword stands in as its place
@@ -5780,12 +5834,30 @@ impl<'a> Lower<'a> {
                 self.stale.extend(inst.writes.iter().map(|w| w.1));
                 return Err("a sampler's descriptor read as data");
             }
-            // A buffer view the code only takes the address of, to walk
-            // the memory behind it (a ray-tracing structure): the address
-            // from the host, the other dwords have no value.
-            if count <= 4
+            // A buffer descriptor loaded only to query its record count (e.g. an
+            // early-out check on dword 2 == 0) whose UsedResource names it as a
+            // buffer SRV/UAV.
+            let src = Source::Loaded { load: site, first: 0 };
+            let used = self.used_kind(&src);
+            if count == 4
+                && let Some(u) = used
+                && u.kind != ResourceType::Cbv
+                && u.dwords == 4
+            {
+                let uav = u.kind == ResourceType::Uav;
+                let uf = if uav { 0x1000 } else { 0 };
+                let props = if u.stride >= 4 && u.stride.is_multiple_of(4) {
+                    (12 | uf, u.stride)
+                } else {
+                    (11 | uf, 0)
+                };
+                (src, Some(u), uav, props, None)
+            } else if count <= 4
                 && let Some((lo, hi)) = self.view_address(site)
             {
+                // A buffer view the code only takes the address of, to walk
+                // the memory behind it (a ray-tracing structure): the address
+                // from the host, the other dwords have no value.
                 for k in 0..count {
                     let reg = Reg::S(code + k as u8);
                     match k {
@@ -5800,67 +5872,38 @@ impl<'a> Lower<'a> {
                     }
                 }
                 return Ok(());
-            }
-            if std::env::var_os("VICTORY_DESC_WHY").is_some() {
-                eprintln!(
-                    "DESC-WHY {:#x} {} scalar={:?} lane_copied={}",
-                    inst.machine.offset,
-                    inst.name(),
-                    address,
-                    self.x.res.lane_copied.contains(&site)
-                );
-            }
-            return Err("a descriptor read only as data");
-        };
-        let src = Source::Loaded { load: site, first };
-        let used = self.used_kind(&src);
-        let ui: &Inst = &self.x.p.blocks[at.0].insts[at.1];
-        let un = ui.name();
-        let uav = un.contains("store")
-            || un.contains("atomic")
-            || used.is_some_and(|u| u.kind == ResourceType::Uav);
-        let u = if uav { 0x1000 } else { 0 };
-        let (props, image) = match &ui.fields {
-            // A ray-tracing structure in a buffer of the host: read raw.
-            Fields::Image { .. } if un.starts_with("image_bvh") => ((11, 0), None),
-            Fields::Image { dim, .. } => {
-                let kind = match dim {
-                    0 => 1,
-                    1 => 2,
-                    2 => 4,
-                    4 => 6,
-                    5 => 7,
-                    _ => return Err("an image dimension (cube or MSAA)"),
-                };
-                ((kind | u, 0x409), Some(kind))
-            }
-            Fields::Buffer { idxen, format, .. } => {
-                let stride = used.map_or(0, |u| u.stride);
-                let props = if un.starts_with("buffer_load_format")
-                    || un.starts_with("buffer_store_format")
-                {
-                    (10 | u, 0x409)
-                } else if *idxen && format.is_none() && stride >= 4 && stride.is_multiple_of(4) {
-                    (12 | u, stride)
-                } else {
-                    (11 | u, 0)
-                };
-                if used.is_some_and(|u| u.kind == ResourceType::Cbv) {
-                    self.stale.extend(inst.writes.iter().map(|w| w.1));
-                    return Err("a constant buffer's descriptor read as data");
+            } else if count == 8
+                && address.is_some_and(|a| {
+                    self.x
+                        .native
+                        .layout
+                        .get(a.param)
+                        .is_some_and(|rp| rp.root == RootType::ResourceHeap)
+                })
+                && !inst
+                    .write(Reg::S(code + 4))
+                    .is_some_and(|v| self.computed_with(v, 6))
+            {
+                // An 8-dword image descriptor from the bindless view heap read
+                // only for its 2D dimensions (width/height/levels, without
+                // reading depth/layers in dword 4), such as `PS_PuddleDetect`.
+                (src, used, false, (2, 0x409), Some(2))
+            } else {
+                if std::env::var_os("VICTORY_DESC_WHY").is_some() {
+                    eprintln!(
+                        "DESC-WHY {:#x} {} scalar={:?} lane_copied={}",
+                        inst.machine.offset,
+                        inst.name(),
+                        address,
+                        self.x.res.lane_copied.contains(&site)
+                    );
                 }
-                (props, None)
+                return Err("a descriptor read only as data");
             }
-            // Read by scalar buffer loads alone: the raw view `smem` reads it through.
-            Fields::Smem { .. } if used.is_some_and(|u| u.kind == ResourceType::Srv) => {
-                ((11, 0), None)
-            }
-            // A constant buffer: nothing of its descriptor is a number.
-            Fields::Smem { .. } => {
-                self.stale.extend(inst.writes.iter().map(|w| w.1));
-                return Err("a constant buffer's descriptor read as data");
-            }
-            _ => return Err("a scalar memory read as data"),
+        };
+        let first = match src {
+            Source::Loaded { first, .. } => first,
+            _ => 0,
         };
         let h = self.handle(site, &src, false, props)?;
         let c = self.cur;
