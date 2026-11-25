@@ -71,11 +71,16 @@ _WNDENUMPROC = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
 _WM_CLOSE = 0x0010
 _SW_RESTORE = 9
 _SW_SHOW = 5
+_SW_SHOWNORMAL = 1
 _HWND_TOPMOST = wt.HWND(-1)
 _HWND_NOTOPMOST = wt.HWND(-2)
 _SWP_NOMOVE = 0x0002
 _SWP_NOSIZE = 0x0001
 _SWP_SHOWWINDOW = 0x0040
+_VK_MENU = 0x12
+_KEYEVENTF_EXTENDEDKEY = 0x0001
+_KEYEVENTF_KEYUP = 0x0002
+_ASFW_ANY = 0xFFFFFFFF
 
 _user32.AllowSetForegroundWindow.argtypes = [wt.DWORD]
 _user32.AllowSetForegroundWindow.restype = wt.BOOL
@@ -95,8 +100,27 @@ _user32.BringWindowToTop.argtypes = [wt.HWND]
 _user32.BringWindowToTop.restype = wt.BOOL
 _user32.SetForegroundWindow.argtypes = [wt.HWND]
 _user32.SetForegroundWindow.restype = wt.BOOL
+_user32.SwitchToThisWindow.argtypes = [wt.HWND, wt.BOOL]
+_user32.SwitchToThisWindow.restype = None
+_user32.keybd_event.argtypes = [wt.BYTE, wt.BYTE, wt.DWORD, ctypes.c_void_p]
+_user32.keybd_event.restype = None
+_user32.GetWindowRect.argtypes = [wt.HWND, ctypes.POINTER(wt.RECT)]
+_user32.GetWindowRect.restype = wt.BOOL
 _kernel32.GetCurrentThreadId.argtypes = []
 _kernel32.GetCurrentThreadId.restype = wt.DWORD
+
+
+def _hwnd_int(h):
+    if h is None:
+        return 0
+    return int(getattr(h, "value", h) or 0)
+
+
+def _window_size(hwnd):
+    r = wt.RECT()
+    if _user32.GetWindowRect(wt.HWND(hwnd), ctypes.byref(r)):
+        return (r.right - r.left, r.bottom - r.top)
+    return (0, 0)
 
 
 def _bring_to_front(hwnd, pid):
@@ -106,7 +130,9 @@ def _bring_to_front(hwnd, pid):
     fg_tid = 0
     target_tid = 0
     try:
-        hwnd_v = wt.HWND(hwnd)
+        hwnd_i = _hwnd_int(hwnd)
+        hwnd_v = wt.HWND(hwnd_i)
+        _user32.AllowSetForegroundWindow(_ASFW_ANY)
         _user32.AllowSetForegroundWindow(pid)
         fg = _user32.GetForegroundWindow()
         if fg:
@@ -120,13 +146,17 @@ def _bring_to_front(hwnd, pid):
             _user32.ShowWindow(hwnd_v, _SW_RESTORE)
         else:
             _user32.ShowWindow(hwnd_v, _SW_SHOW)
-        # Brief topmost toggle + thread input attach reliably raises above Chrome on Windows 11.
+        # Brief Alt key tap unlocks Windows 11 ForegroundLockTimeout even when Chrome owns focus.
+        _user32.keybd_event(_VK_MENU, 0, _KEYEVENTF_EXTENDEDKEY, None)
+        _user32.keybd_event(_VK_MENU, 0, _KEYEVENTF_EXTENDEDKEY | _KEYEVENTF_KEYUP, None)
         _user32.SetWindowPos(hwnd_v, _HWND_TOPMOST, 0, 0, 0, 0, _SWP_NOMOVE | _SWP_NOSIZE | _SWP_SHOWWINDOW)
         _user32.SetWindowPos(hwnd_v, _HWND_NOTOPMOST, 0, 0, 0, 0, _SWP_NOMOVE | _SWP_NOSIZE | _SWP_SHOWWINDOW)
         _user32.BringWindowToTop(hwnd_v)
         _user32.SetForegroundWindow(hwnd_v)
-    except OSError:
-        pass
+        _user32.SwitchToThisWindow(hwnd_v, True)
+        return _hwnd_int(_user32.GetForegroundWindow()) == hwnd_i
+    except (OSError, ValueError):
+        return False
     finally:
         if attached_target:
             _user32.AttachThreadInput(cur_tid, target_tid, False)
@@ -598,6 +628,9 @@ def launch_game(cfg, developer):
                 current.replace(LOGDIR / "play.previous.log")
             except OSError:
                 pass
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        si.wShowWindow = _SW_SHOWNORMAL
         proc = subprocess.Popen(
             cmd,
             cwd=str(ENGINE),
@@ -607,27 +640,37 @@ def launch_game(cfg, developer):
             text=True,
             encoding="utf-8",
             errors="replace",
+            startupinfo=si,
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
         PROC = proc
         try:
+            _user32.AllowSetForegroundWindow(_ASFW_ANY)
             _user32.AllowSetForegroundWindow(proc.pid)
         except OSError:
             pass
 
     def focus_when_ready():
         deadline = time.monotonic() + 60.0
+        raised_hwnd = 0
         while time.monotonic() < deadline:
             if proc.poll() is not None:
                 return
             for hwnd, pid, _ in _find_game_windows():
-                if pid == proc.pid:
-                    _bring_to_front(hwnd, pid)
-                    time.sleep(0.35)
-                    if proc.poll() is None and _user32.GetForegroundWindow() != hwnd:
-                        _bring_to_front(hwnd, pid)
-                    return
-            time.sleep(0.25)
+                if pid != proc.pid:
+                    continue
+                w, h = _window_size(hwnd)
+                if w < 200 or h < 200:
+                    continue
+                raised_hwnd = _hwnd_int(hwnd)
+                for _ in range(8):
+                    if proc.poll() is not None:
+                        return
+                    if _bring_to_front(raised_hwnd, pid):
+                        return
+                    time.sleep(0.25)
+                return
+            time.sleep(0.2)
 
     threading.Thread(target=focus_when_ready, daemon=True).start()
 
