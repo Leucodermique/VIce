@@ -249,8 +249,8 @@ static THROUGH: Mutex<Option<HashMap<usize, Arc<Through>>>> = Mutex::new(None);
 /// layer are copied as they are, through a buffer (the host copies between
 /// two formats of one texel width in no other way). Recorded the first time
 /// the list reads the view
-/// and again whenever the list used `source` in another way since (wrote
-/// it, or read it itself). Leaves `placed` in the copy destination state,
+/// and again when the source changes or the list used it in another state.
+/// Leaves `placed` in the copy destination state,
 /// as [`upload`] does. False if the copy cannot be made: the caller fills
 /// the texture from title memory, as before.
 pub(crate) fn alias(list: &HostList, placed: This, source: This) -> bool {
@@ -355,7 +355,8 @@ pub(crate) fn alias(list: &HostList, placed: This, source: This) -> bool {
             }
         }
     };
-    let first = list.first_use(placed as usize);
+    let first = !list.asked(placed as usize);
+    let source_changed = list.alias_source_changed(placed as usize, from);
     // Before the list touches either texture: the copy goes to the
     // prelude, which leaves it out if the source was not written since.
     if alias_once()
@@ -389,7 +390,7 @@ pub(crate) fn alias(list: &HostList, placed: This, source: This) -> bool {
         unsafe { list.list.ResourceBarrier(&[barrier]) };
         before
     });
-    if !first && before.is_none() {
+    if !source_changed && before.is_none() {
         return true;
     }
     card_writes(list, placed, to, None);

@@ -2044,6 +2044,8 @@ struct Deferred {
     refreshed: std::collections::HashSet<(usize, usize, usize)>,
     /// Textures whose contents the list brings up to date.
     textures: std::collections::HashSet<usize>,
+    /// The last host texture copied into each placed alias.
+    alias_sources: std::collections::HashMap<usize, usize>,
     /// Bottom-of-pipe writes, done once the list has run: address, what,
     /// bytes.
     writes: Vec<(usize, crate::queue::Written, usize)>,
@@ -7287,6 +7289,17 @@ impl HostList {
     /// [`first_use`]: HostList::first_use
     pub(crate) fn asked(&self, key: usize) -> bool {
         self.deferred().textures.contains(&key)
+    }
+
+    /// Whether the alias needs a copy from a different source in this recording.
+    pub(crate) fn alias_source_changed(&self, placed: usize, source: &ID3D12Resource) -> bool {
+        let mut deferred = self.deferred();
+        let source = source.as_raw() as usize;
+        let previous = deferred.alias_sources.insert(placed, source);
+        if previous.is_none() {
+            deferred.textures.insert(placed);
+        }
+        previous != Some(source)
     }
 
     /// Runs `work` when the list is submitted, in order with its copies.
