@@ -563,20 +563,26 @@ def launch_game(cfg, developer):
     bvh_builder = bool(cfg.get("bvhBuilder", False))
 
     if fast_gpu:
-        # RTX 4070 Laptop 8 GB / 16 GB RAM proven profile (fxceless #912 + a26859f):
-        # - LEVELS_ON_DEMAND=1 saves ~2.4-3.1 GB VRAM
-        # - RELAY=1 + INDIRECT_WINDOW=1 + TEXTURE_NO_WAIT=1 + WIDE_BACK=1 + CARD_REHASH_RUNS=1
-        #   avoids the 3x 8 GB slowdown from stacking ASYNC_SUBMIT+QUEUE2+COPY_PLAIN (#912)
-        # - CARD_ROOM_FOR_TARGETS_MB=1536 leaves room for 1 MiB+ card buffers on 8 GB cards
+        # RTX 4070 Laptop 8 GB / 16 GB RAM anti-lag profile:
+        # - TEXTURE_CATCHUP=0 + TEXTURE_STAGE_MS=24 caps per-frame texture pass (755 ms -> ~24 ms)
+        # - RELAY=2 + INDIRECT_WINDOW=1 + JOIN_PARTS=1 (proven 4-5+ fps on 8 GB in fxceless #912)
+        # - CARD_WINDOWS_MB=384 + WINDOW_KB=1024 + WINDOW_TAILS=1 offloads ~578 MB/frame CPU window scans to GPU
+        # - LEVELS_ON_DEMAND=1 saves ~2.6 GB VRAM; spill kept tiny to avoid 16 GB RAM OOM (0x8007000E)
         env["VICTORY_LEVELS_ON_DEMAND"] = "1"
-        env["VICTORY_RELAY"] = "1"
+        env["VICTORY_RELAY"] = "2"
         env["VICTORY_INDIRECT_WINDOW"] = "1"
+        env["VICTORY_JOIN_PARTS"] = "1"
         env["VICTORY_TEXTURE_NO_WAIT"] = "1"
+        env["VICTORY_TEXTURE_CATCHUP"] = "0"
+        env["VICTORY_TEXTURE_STAGE_MS"] = "24"
         env["VICTORY_WIDE_BACK"] = "1"
         env["VICTORY_CARD_REHASH_RUNS"] = "1"
         env["VICTORY_LATE_WAIT_LISTS"] = "512"
         env["VICTORY_CARD_BUFFERS_MIN_MB"] = "1"
-        env["VICTORY_CARD_BUFFERS_MB"] = "512"
+        env["VICTORY_CARD_BUFFERS_MB"] = "768"
+        env["VICTORY_CARD_WINDOWS_MB"] = "384"
+        env["VICTORY_WINDOW_KB"] = "1024"
+        env["VICTORY_WINDOW_TAILS"] = "1"
         env["VICTORY_TEXTURE_ROOM_PERCENT"] = "94"
         env["VICTORY_TEXTURE_SPILL_PERCENT"] = "0" if console == "series-s" else "10"
         env["VICTORY_CARD_ROOM_FOR_TARGETS_MB"] = "1024" if console == "series-s" else "1536"
@@ -586,11 +592,15 @@ def launch_game(cfg, developer):
         env["VICTORY_LEVELS_ON_DEMAND"] = "1"
         env["VICTORY_RELAY"] = "0"
         env["VICTORY_INDIRECT_WINDOW"] = "0"
+        env["VICTORY_JOIN_PARTS"] = "0"
+        env["VICTORY_TEXTURE_CATCHUP"] = "0"
+        env["VICTORY_TEXTURE_STAGE_MS"] = "24"
         env["VICTORY_WIDE_BACK"] = "0"
         env["VICTORY_CARD_REHASH_RUNS"] = "1"
         env["VICTORY_LATE_WAIT_LISTS"] = "128"
         env["VICTORY_CARD_BUFFERS_MIN_MB"] = "16"
         env["VICTORY_CARD_BUFFERS_MB"] = "512"
+        env["VICTORY_CARD_WINDOWS_MB"] = "0"
         env["VICTORY_TEXTURE_ROOM_PERCENT"] = "94"
         env["VICTORY_TEXTURE_SPILL_PERCENT"] = "0" if console == "series-s" else "10"
         env["VICTORY_CARD_ROOM_FOR_TARGETS_MB"] = "1024" if console == "series-s" else "1536"
