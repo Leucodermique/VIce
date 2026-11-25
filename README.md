@@ -55,7 +55,7 @@ VIce tracks and integrates verified advancements from:
 | **Saves & checkpoints** | Autosave checkpoint creation and reload working. |
 | **First playable scene (prison cell & yard)** | Renders characters, hair/skin textures, solid walls & ceiling, sunlit exterior, HUD, pause menu, and pad/keyboard input (`5,000–6,376 draws/frame`, `Exit code: 0`, only **2** unsupported shader ops remaining in full runs). |
 | **Cell lamp & depth-bounded lighting** | Enabled via Depth Bounds Test (`#82` — `DEPTH_STENCIL1` + `OMSetDepthBounds`). |
-| **Shaded interiors (bounce light)** | Still dark where direct light does not reach (RT GI / BVH trace not yet enabled by default; **49/52** `XboxBvhBuilder.dll` shaders already validate & build D3D12 PSOs on RTX 4070 with `VICTORY_HOST_MAX_WAVE=32`). |
+| **Shaded interiors (bounce light)** | Still dark where direct light does not reach (RT GI / BVH trace off by default; **52/52** `XboxBvhBuilder.dll` shaders now validate & build D3D12 PSOs on RTX 4070 32-lane waves via PR `#601`). |
 | **In-world frame rate** | Progressed from **100% black screen / 1 fps** to **2–4+ fps** (`240–450 ms/frame`), with ongoing work to move remaining CPU buffer scans to the GPU `COPY` queue. |
 
 ### 1. Rendering & Visual Fidelity
@@ -63,6 +63,8 @@ VIce tracks and integrates verified advancements from:
 - **Depth Bounds Test (`#82`, `fxceless c96b4f2` + `LooperSalty 35cdf6f`)**: creates `DEPTH_STENCIL1` pipelines and forwards `OMSetDepthBounds` to the host command list so room lamps properly illuminate walls, tables, and bunks.
 - **Character skin & hair color fixes (`a803c87` + `c96b4f2`)**: re-checks bindless indexed textures after upload (`4/12/40/120/400` frames) and uploads bindless textures before the character decoration bake runs (`VICTORY_EARLY_TEXTURES_MS`, `VICTORY_BAKE_TEXTURES_MS`).
 - **Packed bindless textures & full-VRAM refresh (`fxceless 310c6eb`)**: prevents packed neighbouring texture views from invalidating tens of thousands of upload-queue slots (`VICTORY_STALE_TEXTURES` now marks older views stale only within the first 4 KiB) and allows already-resident textures to re-upload modified bytes even when VRAM is full (`VICTORY_REUPLOAD_WHEN_FULL=1` by default) — lighting the first room with its walls and character textures from the very first launch at **3–5 fps**.
+- **6–8 GB Laptop VRAM Spill & +160 Shaders (`fxceless PR #601`)**: spills bindless textures into shared system memory when 8 GB VRAM fills (`VICTORY_TEXTURE_SPILL=1`), waits on pending compute pipelines instead of dropping dispatches (`VICTORY_COMPUTE_WAIT=1`), guards Windows commit memory (`VICTORY_PIPELINE_COMMIT_MB`), unlocks **52/52** `XboxBvhBuilder.dll` shaders on 32-lane NVIDIA GPUs (`lane_uniform` + `lds_settled`), and adds lone first-half interpolation fallback (**14,199 / 14,247** VS/PS = **99.66%** emitted).
+- **NVIDIA 32-lane Wave64 & Shader Fixes (`fxceless PR #592`, `#146`, `#638`, `#639`)**: unlocks `sr_tracing:CS_Tiling_Generate_Opaque` (`#2cc4c197ee29e291`) as two 32-lane host waves on NVIDIA, lowers sparse `image_store` channel masks, `ds_sub_u32` LDS atomics, and `s_brev_b64`.
 - **195 merged Geometry Shaders (`#381`)** and **dual comparison/normal sampler slots (`#386`)**.
 - **`R9G9B9E5` render-target stand-in** (`R16G16B16A16_FLOAT`) and **2 irradiance cache shaders** unlocked (`194c736`, `fd021bf`).
 - **BCPack BC7 fix (`a68db08`)**: preserves all 32 indices in the first BC7 dictionary entry to prevent texture corruption.

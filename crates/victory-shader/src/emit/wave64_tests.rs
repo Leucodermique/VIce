@@ -641,6 +641,7 @@ fn flag_wave(native: &NativeProgram) -> Option<u32> {
         outputs: Vec::new(),
         prims: Vec::new(),
         mesh_stride: 0,
+        gs: None,
     });
     lower::TEST_HOST_WAVE.set(was);
     lowered.expect("lower").wave_size
