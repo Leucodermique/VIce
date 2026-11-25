@@ -574,8 +574,11 @@ def launch_game(cfg, developer):
         env.pop("VICTORY_LEVELS_ON_DEMAND", None)
         if console == "series-x":
             env["VICTORY_RESOLUTION"] = "1920x1080"
+            env["VICTORY_DISPLAY_MODE"] = "1920x1080"
         else:
             env.pop("VICTORY_RESOLUTION", None)
+            env.pop("VICTORY_DISPLAY_MODE", None)
+        env["VICTORY_AMBIENT"] = "off" if bvh_builder else "0.45"
         env["VICTORY_TEXTURE_DROP_MIPS"] = "2"
         env.pop("VICTORY_RELAY", None)
         env["VICTORY_ASYNC_SUBMIT"] = "1"
