@@ -171,10 +171,13 @@ fn hook(hwnd: HWND) {
         let title = wm::GetWindowLongPtrW(hwnd, wm::GWLP_WNDPROC);
         wm::SetPropW(hwnd, TITLE_PROC, title as *mut c_void);
         wm::SetWindowLongPtrW(hwnd, wm::GWLP_WNDPROC, window_proc as *const () as isize);
-        // [patch] Borderless, reachable, and smaller than the screen: a window
-        // that covers the screen exactly is scanned out directly, which shows
-        // black on some drivers, while DWM composes and stretches a smaller one.
-        if let Some((frame_w, frame_h)) = requested_frame() {
+        // [patch] Borderless, reachable, and smaller than the screen when
+        // explicitly requested (`VICTORY_BORDERLESS=1` or `VICTORY_WINDOW_PERCENT`):
+        // avoids independent-flip black screens on drivers that need DWM composition,
+        // while keeping the normal title-bar window by default.
+        let borderless = std::env::var_os("VICTORY_BORDERLESS").is_some_and(|v| v == "1")
+            || std::env::var_os("VICTORY_WINDOW_PERCENT").is_some();
+        if borderless && let Some((frame_w, frame_h)) = requested_frame() {
             let percent = std::env::var("VICTORY_WINDOW_PERCENT")
                 .ok()
                 .and_then(|v| v.trim().parse::<u32>().ok())
