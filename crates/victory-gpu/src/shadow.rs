@@ -147,6 +147,9 @@ pub(crate) fn cards() -> bool {
 /// most bytes of such copies (their "before" twins not counted: a copy
 /// shaders write takes its size twice), both in bytes:
 /// `VICTORY_CARD_BUFFERS_MIN_MB` (16) and `VICTORY_CARD_BUFFERS_MB` (512).
+/// `VICTORY_CARD_BUFFERS_MIN_KB` names the smallest in KiB instead, below
+/// 1 MiB too (0: every title buffer): run int-k-2's world has 3,604 title
+/// buffers under 1 MiB, 42 MB in all, that shaders read over the bus.
 /// Run 69's gameplay has ten title buffers of 16 MiB or more, 494 MB, and
 /// 1,650 MB of the card's budget free.
 fn card_limits() -> (u64, u64) {
@@ -159,7 +162,11 @@ fn card_limits() -> (u64, u64) {
         // the shader writes of the smaller buffers are then found by the
         // card's hashes too, and with that the first room's walls were
         // drawn in every run.
-        (mb("VICTORY_CARD_BUFFERS_MIN_MB", 1).max(1 << 20), mb("VICTORY_CARD_BUFFERS_MB", 1024))
+        let least = match std::env::var("VICTORY_CARD_BUFFERS_MIN_KB").ok().and_then(|v| v.trim().parse::<u64>().ok()) {
+            Some(kb) => kb << 10,
+            None => mb("VICTORY_CARD_BUFFERS_MIN_MB", 1).max(1 << 20),
+        };
+        (least, mb("VICTORY_CARD_BUFFERS_MB", 1024))
     })
 }
 
