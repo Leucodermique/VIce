@@ -1027,25 +1027,6 @@ fn protect_here(g: &mut Guards, from: usize, to: usize) {
     while block < to {
         if set(block, block + 1) {
             note(g, block, block + 1);
-<<<<<<< HEAD
-        } else {
-            #[cfg(feature = "diagnostics")]
-            let error = std::io::Error::last_os_error();
-            if block < uncommitted_end(block) {
-                g.absent.insert(block);
-            } else {
-                // Diagnostics: a committed block that will not be made
-                // read-only is reported written at every asking and never
-                // known to the guards (one in 1,024 said).
-                #[cfg(feature = "diagnostics")]
-                {
-                    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-                    if N.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 1024 == 0 {
-                        tracing::info!("a block of title memory could not be made read-only (one in 1024): {:#x}: {error}", block * BLOCK);
-                    }
-                }
-            }
-=======
             block += 1;
             continue;
         }
@@ -1060,7 +1041,6 @@ fn protect_here(g: &mut Guards, from: usize, to: usize) {
             block = end;
         } else {
             block += 1;
->>>>>>> cc642f9 (GPU: the guards can keep what Windows said of uncommitted runs for a frame (VICTORY_GUARD_HOLES_FRAME, off by default))
         }
     }
 }

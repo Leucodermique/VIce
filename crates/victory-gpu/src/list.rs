@@ -632,6 +632,15 @@ extern "system" fn close(this: This) -> HRESULT {
     S_OK
 }
 extern "system" fn reset(this: This, allocator: This, pipeline: This) -> HRESULT {
+    #[cfg(windows)]
+    {
+        thread_local! {
+            static PINNED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        }
+        if !PINNED.replace(true) {
+            crate::framelog::keep_on_fast_cores("title-record");
+        }
+    }
     if allocator.is_null() {
         return E_INVALIDARG;
     }
