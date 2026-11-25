@@ -34,6 +34,51 @@ Corner corner(uint i : SV_VertexID) {
 float4 over(Corner c) : SV_Target { return plane.Sample(bilinear, c.at); }
 "#;
 
+/// Full-screen copy that detects a 1080p-capped Series X 2D menu/loading screen
+/// drawn only into the top-left quarter [0..0.5, 0..0.5] (with the other three
+/// quadrants pure black) and stretches that quarter cleanly across the window.
+const QUARTER_SOURCE: &str = r#"
+Texture2D<float4> plane : register(t0);
+SamplerState bilinear : register(s0);
+struct Corner { float4 position : SV_Position; float2 at : TEXCOORD0; };
+Corner corner(uint i : SV_VertexID) {
+    Corner c;
+    c.at = float2(float(i & 1) * 2.0, float(i >> 1) * 2.0);
+    c.position = float4(c.at.x * 2.0 - 1.0, 1.0 - c.at.y * 2.0, 0.0, 1.0);
+    return c;
+}
+float4 copy_or_quarter(Corner c) : SV_Target {
+    float outer = 0.0;
+    [unroll] for (int oy = 0; oy < 4; oy++) {
+        [unroll] for (int ox = 0; ox < 4; ox++) {
+            float2 p = float2(0.125 + ox * 0.25, 0.125 + oy * 0.25);
+            if (p.x > 0.5 || p.y > 0.5) {
+                float3 v = plane.SampleLevel(bilinear, p, 0).rgb;
+                outer = max(outer, max(v.r, max(v.g, v.b)));
+            }
+        }
+    }
+    float inner = 0.0;
+    [unroll] for (int iy = 0; iy < 3; iy++) {
+        [unroll] for (int ix = 0; ix < 3; ix++) {
+            float2 p = float2(0.08 + ix * 0.17, 0.08 + iy * 0.17);
+            float3 v = plane.SampleLevel(bilinear, p, 0).rgb;
+            inner = max(inner, max(v.r, max(v.g, v.b)));
+        }
+    }
+    float3 corner_p = plane.SampleLevel(bilinear, float2(0.42, 0.46), 0).rgb;
+    inner = max(inner, max(corner_p.r, max(corner_p.g, corner_p.b)));
+    uint w, h;
+    plane.GetDimensions(w, h);
+    float2 uv = c.at;
+    if (outer < 0.002 && inner > 0.002) {
+        float2 lim = float2(0.5 - 0.5 / max(float(w), 1.0), 0.5 - 0.5 / max(float(h), 1.0));
+        uv = min(c.at * 0.5, lim);
+    }
+    return float4(plane.SampleLevel(bilinear, uv, 0).rgb, 1.0);
+}
+"#;
+
 /// Views kept until the list that uses them has run: a present can be sent
 /// ahead of the card, so a view is not reused for this many presents.
 ///
@@ -58,6 +103,7 @@ struct Pass {
 unsafe impl Send for Pass {}
 
 static PASS: Mutex<Option<Pass>> = Mutex::new(None);
+static QUARTER_PASS: Mutex<Option<Pass>> = Mutex::new(None);
 
 /// A bilinear, clamping sampler at `s0` for the stages `visibility` names.
 fn bilinear(visibility: D3D12_SHADER_VISIBILITY) -> D3D12_STATIC_SAMPLER_DESC {
@@ -133,9 +179,29 @@ fn table(ranges: &[D3D12_DESCRIPTOR_RANGE], visibility: D3D12_SHADER_VISIBILITY)
 }
 
 fn make(device: &ID3D12Device, format: DXGI_FORMAT) -> windows::core::Result<Pass> {
+    make_pass(device, format, SOURCE, windows::core::s!("over"), true)
+}
+
+fn make_quarter(device: &ID3D12Device, format: DXGI_FORMAT) -> windows::core::Result<Pass> {
+    make_pass(
+        device,
+        format,
+        QUARTER_SOURCE,
+        windows::core::s!("copy_or_quarter"),
+        false,
+    )
+}
+
+fn make_pass(
+    device: &ID3D12Device,
+    format: DXGI_FORMAT,
+    source: &str,
+    pixel_entry: windows::core::PCSTR,
+    blend: bool,
+) -> windows::core::Result<Pass> {
     use windows::core::s;
-    let vs = crate::host::compile(SOURCE, s!("corner"), s!("vs_5_1"))?;
-    let ps = crate::host::compile(SOURCE, s!("over"), s!("ps_5_1"))?;
+    let vs = crate::host::compile(source, s!("corner"), s!("vs_5_1"))?;
+    let ps = crate::host::compile(source, pixel_entry, s!("ps_5_1"))?;
     let code = |bytes: &[u8]| D3D12_SHADER_BYTECODE {
         pShaderBytecode: bytes.as_ptr().cast(),
         BytecodeLength: bytes.len(),
@@ -171,7 +237,7 @@ fn make(device: &ID3D12Device, format: DXGI_FORMAT) -> windows::core::Result<Pas
         };
         desc.RTVFormats[0] = format;
         desc.BlendState.RenderTarget[0] = D3D12_RENDER_TARGET_BLEND_DESC {
-            BlendEnable: true.into(),
+            BlendEnable: blend.into(),
             SrcBlend: D3D12_BLEND_ONE,
             DestBlend: D3D12_BLEND_INV_SRC_ALPHA,
             BlendOp: D3D12_BLEND_OP_ADD,
@@ -279,6 +345,91 @@ pub(crate) fn record(
         };
         device.CreateRenderTargetView(back, Some(&target_desc), target);
         device.CreateShaderResourceView(plane, Some(&view), cpu);
+        list.SetDescriptorHeaps(&[Some(p.views.clone())]);
+        list.SetGraphicsRootSignature(&p.root);
+        list.SetPipelineState(&p.pipeline);
+        list.SetGraphicsRootDescriptorTable(0, gpu);
+        list.OMSetRenderTargets(1, Some(&target), false, None);
+        list.RSSetViewports(&[D3D12_VIEWPORT {
+            TopLeftX: 0.0,
+            TopLeftY: 0.0,
+            Width: width as f32,
+            Height: height as f32,
+            MinDepth: 0.0,
+            MaxDepth: 1.0,
+        }]);
+        list.RSSetScissorRects(&[RECT {
+            left: 0,
+            top: 0,
+            right: width as i32,
+            bottom: height as i32,
+        }]);
+        list.IASetPrimitiveTopology(windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY(4));
+        list.DrawInstanced(3, 1, 0, 0);
+    }
+    true
+}
+
+/// Copies `source` onto `back`, automatically stretching the top-left quarter
+/// [0..width/2, 0..height/2] to full screen when the remaining three quadrants
+/// are pure black (fixes the 1080p-capped Series X 2D menu / loading screens).
+pub(crate) fn record_auto_quarter(
+    device: &ID3D12Device,
+    list: &ID3D12GraphicsCommandList,
+    back: &ID3D12Resource,
+    format: DXGI_FORMAT,
+    (width, height): (u32, u32),
+    source: &ID3D12Resource,
+    source_format: DXGI_FORMAT,
+) -> bool {
+    let mut pass = QUARTER_PASS.lock().unwrap_or_else(|e| e.into_inner());
+    if pass.as_ref().is_none_or(|p| p.format != format.0) {
+        *pass = match make_quarter(device, format) {
+            Ok(p) => Some(p),
+            Err(e) => {
+                static TOLD: std::sync::Once = std::sync::Once::new();
+                TOLD.call_once(|| {
+                    tracing::warn!(error = %e, "no pass for auto-quarter menu stretch");
+                });
+                return false;
+            }
+        };
+    }
+    let Some(p) = pass.as_mut() else { return false };
+    let slot = p.next % RING;
+    p.next = p.next.wrapping_add(1);
+    let view = D3D12_SHADER_RESOURCE_VIEW_DESC {
+        Format: source_format,
+        ViewDimension: D3D12_SRV_DIMENSION_TEXTURE2D,
+        Shader4ComponentMapping: D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+        Anonymous: D3D12_SHADER_RESOURCE_VIEW_DESC_0 {
+            Texture2D: D3D12_TEX2D_SRV {
+                MostDetailedMip: 0,
+                MipLevels: 1,
+                ..Default::default()
+            },
+        },
+    };
+    let target_desc = D3D12_RENDER_TARGET_VIEW_DESC {
+        Format: format,
+        ViewDimension: D3D12_RTV_DIMENSION_TEXTURE2D,
+        ..Default::default()
+    };
+    // SAFETY: an open list; slots of our heaps; live resources and objects.
+    unsafe {
+        let target = D3D12_CPU_DESCRIPTOR_HANDLE {
+            ptr: p.targets.GetCPUDescriptorHandleForHeapStart().ptr + slot as usize * p.target_step,
+        };
+        let cpu = D3D12_CPU_DESCRIPTOR_HANDLE {
+            ptr: p.views.GetCPUDescriptorHandleForHeapStart().ptr
+                + (slot * p.view_step) as usize,
+        };
+        let gpu = D3D12_GPU_DESCRIPTOR_HANDLE {
+            ptr: p.views.GetGPUDescriptorHandleForHeapStart().ptr
+                + u64::from(slot * p.view_step),
+        };
+        device.CreateRenderTargetView(back, Some(&target_desc), target);
+        device.CreateShaderResourceView(source, Some(&view), cpu);
         list.SetDescriptorHeaps(&[Some(p.views.clone())]);
         list.SetGraphicsRootSignature(&p.root);
         list.SetPipelineState(&p.pipeline);
