@@ -947,6 +947,7 @@ async function api(path, opts = {}, retry = true) {
     return data;
   } catch (err) {
     if (err.name === "AbortError") throw new Error(t("msg_timeout"));
+    if (err instanceof TypeError) throw new Error(t("conn_stopped"));
     throw err;
   } finally {
     clearTimeout(timer);
@@ -1198,6 +1199,7 @@ $("btn-play").onclick = async () => {
       setMsg(err.message || t("msg_err_stop"), "err");
     } finally {
       actionBusy = false;
+      renderState();
       await pollState();
     }
   } else {
@@ -1223,6 +1225,7 @@ $("btn-play").onclick = async () => {
       setMsg(err.message || t("msg_err_launch"), "err");
     } finally {
       actionBusy = false;
+      renderState();
       await pollState();
     }
   }
