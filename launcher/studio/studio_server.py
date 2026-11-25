@@ -69,6 +69,69 @@ _kernel32 = ctypes.windll.kernel32
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 _WNDENUMPROC = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
 _WM_CLOSE = 0x0010
+_SW_RESTORE = 9
+_SW_SHOW = 5
+_HWND_TOPMOST = wt.HWND(-1)
+_HWND_NOTOPMOST = wt.HWND(-2)
+_SWP_NOMOVE = 0x0002
+_SWP_NOSIZE = 0x0001
+_SWP_SHOWWINDOW = 0x0040
+
+_user32.AllowSetForegroundWindow.argtypes = [wt.DWORD]
+_user32.AllowSetForegroundWindow.restype = wt.BOOL
+_user32.GetForegroundWindow.argtypes = []
+_user32.GetForegroundWindow.restype = wt.HWND
+_user32.GetWindowThreadProcessId.argtypes = [wt.HWND, ctypes.POINTER(wt.DWORD)]
+_user32.GetWindowThreadProcessId.restype = wt.DWORD
+_user32.AttachThreadInput.argtypes = [wt.DWORD, wt.DWORD, wt.BOOL]
+_user32.AttachThreadInput.restype = wt.BOOL
+_user32.IsIconic.argtypes = [wt.HWND]
+_user32.IsIconic.restype = wt.BOOL
+_user32.ShowWindow.argtypes = [wt.HWND, ctypes.c_int]
+_user32.ShowWindow.restype = wt.BOOL
+_user32.SetWindowPos.argtypes = [wt.HWND, wt.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wt.UINT]
+_user32.SetWindowPos.restype = wt.BOOL
+_user32.BringWindowToTop.argtypes = [wt.HWND]
+_user32.BringWindowToTop.restype = wt.BOOL
+_user32.SetForegroundWindow.argtypes = [wt.HWND]
+_user32.SetForegroundWindow.restype = wt.BOOL
+_kernel32.GetCurrentThreadId.argtypes = []
+_kernel32.GetCurrentThreadId.restype = wt.DWORD
+
+
+def _bring_to_front(hwnd, pid):
+    attached_fg = False
+    attached_target = False
+    cur_tid = _kernel32.GetCurrentThreadId()
+    fg_tid = 0
+    target_tid = 0
+    try:
+        hwnd_v = wt.HWND(hwnd)
+        _user32.AllowSetForegroundWindow(pid)
+        fg = _user32.GetForegroundWindow()
+        if fg:
+            fg_tid = _user32.GetWindowThreadProcessId(fg, None)
+        target_tid = _user32.GetWindowThreadProcessId(hwnd_v, None)
+        if fg_tid and fg_tid != cur_tid:
+            attached_fg = bool(_user32.AttachThreadInput(cur_tid, fg_tid, True))
+        if target_tid and target_tid != cur_tid and target_tid != fg_tid:
+            attached_target = bool(_user32.AttachThreadInput(cur_tid, target_tid, True))
+        if _user32.IsIconic(hwnd_v):
+            _user32.ShowWindow(hwnd_v, _SW_RESTORE)
+        else:
+            _user32.ShowWindow(hwnd_v, _SW_SHOW)
+        # Brief topmost toggle + thread input attach reliably raises above Chrome on Windows 11.
+        _user32.SetWindowPos(hwnd_v, _HWND_TOPMOST, 0, 0, 0, 0, _SWP_NOMOVE | _SWP_NOSIZE | _SWP_SHOWWINDOW)
+        _user32.SetWindowPos(hwnd_v, _HWND_NOTOPMOST, 0, 0, 0, 0, _SWP_NOMOVE | _SWP_NOSIZE | _SWP_SHOWWINDOW)
+        _user32.BringWindowToTop(hwnd_v)
+        _user32.SetForegroundWindow(hwnd_v)
+    except OSError:
+        pass
+    finally:
+        if attached_target:
+            _user32.AttachThreadInput(cur_tid, target_tid, False)
+        if attached_fg:
+            _user32.AttachThreadInput(cur_tid, fg_tid, False)
 
 
 def _pid_exe_name(pid):
@@ -518,6 +581,26 @@ def launch_game(cfg, developer):
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
         PROC = proc
+        try:
+            _user32.AllowSetForegroundWindow(proc.pid)
+        except OSError:
+            pass
+
+    def focus_when_ready():
+        deadline = time.monotonic() + 60.0
+        while time.monotonic() < deadline:
+            if proc.poll() is not None:
+                return
+            for hwnd, pid, _ in _find_game_windows():
+                if pid == proc.pid:
+                    _bring_to_front(hwnd, pid)
+                    time.sleep(0.35)
+                    if proc.poll() is None and _user32.GetForegroundWindow() != hwnd:
+                        _bring_to_front(hwnd, pid)
+                    return
+            time.sleep(0.25)
+
+    threading.Thread(target=focus_when_ready, daemon=True).start()
 
     now_iso = datetime.now().isoformat(timespec="seconds")
     with LIVE_LOCK:
