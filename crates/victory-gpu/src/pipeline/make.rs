@@ -140,12 +140,6 @@ pub(crate) fn now(p: &Arc<Pending>) -> bool {
 /// At the title's creation of a pipeline: starts it at once if an earlier
 /// run drew with it (during loading, so the world's first frames find it).
 pub(crate) fn early(p: &Arc<Pending>) {
-    // A pipeline on the skip list is never drawn with, so it is not made
-    // early either (it may be one whose creation crashes the host driver).
-    #[cfg(all(windows, feature = "diagnostics"))]
-    if super::skipped_among(&p.shaders).is_some() {
-        return;
-    }
     if !p.shaders.is_empty() && super::library::wanted_early(&p.key) {
         super::library::EARLY.fetch_add(1, Ordering::Relaxed);
         start(p, EARLY);
@@ -299,50 +293,6 @@ fn next() -> Arc<Pending> {
     }
 }
 
-/// Before a worker makes a pipeline: waits (up to 20 s, in 50 ms steps) while less than
-/// `VICTORY_PIPELINE_COMMIT_MB` (2,048; 0 never waits) of the system's commit is left. The
-/// driver's compiler takes a lot of memory for the title's largest programs, the workers make
-/// several at once, and the title commits more while it streams: on a 16 GB machine that
-/// left the commit limit within reach, and the driver failing an allocation crashes inside
-/// itself (an access violation in its own code). XCL found the same and makes its huge
-/// pipelines one at a time with 3 GB free. A pipeline a title thread waits for
-/// ([`now`], [`ready`]) does not wait here.
-fn commit_room() {
-    static FLOOR: OnceLock<u64> = OnceLock::new();
-    let floor = *FLOOR.get_or_init(|| {
-        std::env::var("VICTORY_PIPELINE_COMMIT_MB")
-            .ok()
-            .and_then(|v| v.trim().parse::<u64>().ok())
-            .unwrap_or(2048)
-            << 20
-    });
-    if floor == 0 {
-        return;
-    }
-    let started = Instant::now();
-    let mut waited = false;
-    while crate::host::available_commit().is_some_and(|free| free < floor)
-        && started.elapsed() < Duration::from_secs(20)
-    {
-        if !waited {
-            waited = true;
-            COMMIT_WAITS.fetch_add(1, Ordering::Relaxed);
-            static ONCE: std::sync::Once = std::sync::Once::new();
-            ONCE.call_once(|| {
-                tracing::warn!(
-                    free_mb = crate::host::available_commit().unwrap_or(0) >> 20,
-                    floor_mb = floor >> 20,
-                    "pipeline workers wait: the system's commit is nearly used up"
-                );
-            });
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-}
-
-/// Times a pipeline worker waited for commit ([`commit_room`]).
-pub(crate) static COMMIT_WAITS: AtomicU64 = AtomicU64::new(0);
-
 /// Starts the workers (half the logical processors, 2 to 8) on first use.
 fn workers() -> bool {
     static RUNNING: OnceLock<bool> = OnceLock::new();
@@ -360,9 +310,7 @@ fn workers() -> bool {
                         let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
                     }
                     loop {
-                        let p = next();
-                        commit_room();
-                        p.make();
+                        next().make();
                         if WAITING.fetch_sub(1, Ordering::Relaxed) == 1 {
                             drained();
                         } else {

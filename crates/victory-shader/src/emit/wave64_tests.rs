@@ -127,7 +127,6 @@ fn lowered_on(
         outputs: Vec::new(),
         prims: Vec::new(),
         mesh_stride: 0,
-        gs: None,
     });
     lower::TEST_HOST_WAVE.set(was);
     let lowered = lowered?;
@@ -135,7 +134,7 @@ fn lowered_on(
         stage: HwStage::Cs,
         dxil: lowered.dxil,
         user_data: lowered.user_data,
-        samplers: lowered.samplers.iter().map(|&(w, _)| w).collect(),
+        samplers: lowered.samplers,
         static_samplers: Vec::new(),
         root_cbvs: lowered.root_cbvs,
         root_srvs: lowered.root_srvs,

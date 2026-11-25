@@ -255,20 +255,8 @@ pub fn run(
     pipelines: bool,
     list: bool,
     jobs: Option<usize>,
-    warm: bool,
 ) -> Result<()> {
-    // Dumped shaders and validator reports are game-derived (rule #1).
-    if let Some(dir) = std::env::var_os("VICTORY_EMIT_DUMP") {
-        victory_core::ensure_outside_repo(Path::new(&dir))?;
-    }
     let paths = crate::default_paths(paths)?;
-    if warm {
-        // The cache the run reads, and the run's translation of each
-        // container (this PC's GPU decides its form, as in a run).
-        let cfg = victory_core::Config::load()?;
-        victory_hle::modules::d3d12x::use_shader_cache(cfg.cache_subdir("shaders")?);
-        WARM.store(true, Ordering::Relaxed);
-    }
     // `VICTORY_HOST_MAX_WAVE=32`: translate as for a host whose waves have
     // at most 32 lanes (as the runtime does on such a card).
     if let Some(n) = std::env::var("VICTORY_HOST_MAX_WAVE").ok().and_then(|v| v.parse().ok()) {
@@ -338,15 +326,6 @@ pub fn run(
         }
     }
     let t = total.into_inner().unwrap_or_else(|e| e.into_inner());
-    if warm {
-        let [now, had, failed] = WARMED.each_ref().map(|n| n.load(Ordering::Relaxed));
-        println!(
-            "warmed       {} containers: {now} translated now, {had} already in the cache, \
-             {failed} that do not translate",
-            t.containers
-        );
-        return Ok(());
-    }
     println!(
         "containers   {} ({} duplicates skipped)",
         t.containers, t.duplicates
@@ -399,16 +378,6 @@ pub fn run(
     println!(
         "             {} emitted of {} geometry programs; {} validated, {} pipelines",
         t.gs_emitted, t.gs_programs, t.gs_validated, t.gs_pipelines
-    );
-    println!(
-        "geometry     {} programs: {} resources traced, {} I/O raised, {} stopped at {} \
-         (emitted with the ES half it is linked with, which is in another \
-         container; not among the failures below)",
-        t.gs_programs,
-        t.gs_tracked,
-        t.gs_raised,
-        t.gs_stopped,
-        emit::GS_EMIT
     );
     if !pairs.is_empty() {
         let host = Host::new(false).map_err(anyhow::Error::msg)?;
@@ -465,11 +434,6 @@ pub fn run(
     Ok(())
 }
 
-/// `--warm` (see [`run`]).
-static WARM: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-/// Warmed containers: translated now, found in the cache, not translated.
-static WARMED: [AtomicUsize; 3] = [const { AtomicUsize::new(0) }; 3];
-
 fn translate(
     source: &Source,
     path: &Path,
@@ -496,17 +460,6 @@ fn translate(
             .collect()
     });
     if !only.is_empty() && !only.iter().any(|o| hash.starts_with(o.as_str())) {
-        return;
-    }
-    // `--warm`: into the cache a run reads, nothing else.
-    if WARM.load(Ordering::Relaxed) {
-        t.containers += 1;
-        let k = match victory_hle::modules::d3d12x::warm_shader(&bytes) {
-            Ok(true) => 0,
-            Ok(false) => 1,
-            Err(_) => 2,
-        };
-        WARMED[k].fetch_add(1, Ordering::Relaxed);
         return;
     }
     let example = || format!("{}{} #{hash}", path.display(), source.label());
@@ -591,35 +544,8 @@ fn translate_programs(
                 // failure is listed after the resources' and I/O's.
                 let structured = structure::structure(&program);
                 let lanes = structured.as_ref().ok();
-                let geometry = p.stage == HwStage::Gs;
-                let es = p.stage == HwStage::Es;
-                t.gs_programs += usize::from(geometry);
-                t.es_programs += usize::from(es);
-                if es {
-                    match victory_shader::handoff::es_record(&program) {
-                        Ok(r) => {
-                            t.es_records += 1;
-                            t.es_max_dwords = t.es_max_dwords.max(r.dwords);
-                        }
-                        // (an ES half is not emitted alone: this is where it fails)
-                        Err(ShaderError::Unsupported { what, .. }) => {
-                            t.fail(format!("ES record: {what}"), || format!("{} {:?}", example(), p.stage));
-                        }
-                        Err(e) => t.fail(e.to_string(), || format!("{} {:?}", example(), p.stage)),
-                    }
-                }
-                if geometry && let Ok(l) = victory_shader::merged::limits(&program) {
-                    t.gs_bounded += 1;
-                    t.gs_max_vertices = t.gs_max_vertices.max(l.max_vertices);
-                }
-                // (the ES half each geometry program pairs with is not in
-                // its container: its user data 0 and 1 are taken as free, which
-                // the geometry line says)
-                let track = if geometry || es { resource::track_merged } else { resource::track };
-                let res = match track(&program, &p.layout, p.stage, lanes) {
+                let res = match resource::track(&program, &p.layout, p.stage, lanes) {
                     Ok(r) => {
-                        t.gs_tracked += usize::from(geometry);
-                        t.es_tracked += usize::from(es);
                         tally_resources(&p, &r, t);
                         Some(r)
                     }
@@ -644,8 +570,6 @@ fn translate_programs(
                             if graphics {
                                 tally_io(&r, t);
                             }
-                            t.gs_raised += usize::from(geometry);
-                            t.es_raised += usize::from(es);
                             raised = Some(r);
                         }
                         Err(ShaderError::Unsupported { offset, what }) => t
@@ -672,24 +596,6 @@ fn translate_programs(
                 };
                 if let (Some(r), Some(i), Some(s)) = (res, raised, structured) {
                     let label = || format!("{} {:?}", example(), p.stage);
-                    if es {
-                        // Translated with its GS half (`emit::merged_halves`), not alone.
-                        continue;
-                    }
-                    if geometry {
-                        // A geometry program is emitted with its ES half
-                        // (`emit::translate_merged_gs`), which is in another
-                        // container: counted on its own line, anything else
-                        // it fails with is a failure.
-                        match emit::emit(container, &p, &program, &s, &i, &r) {
-                            Err(ShaderError::Unsupported { what, .. }) if what == emit::GS_EMIT => {
-                                t.gs_stopped += 1;
-                            }
-                            Err(e) => t.fail(format!("emit: {e}"), label),
-                            Ok(_) => unreachable!("geometry emission is refused"),
-                        }
-                        continue;
-                    }
                     *counter(t, p.stage, 0) += 1;
                     match emit::emit(container, &p, &program, &s, &i, &r) {
                         Ok(shader) => {
@@ -816,9 +722,6 @@ fn check(
         }
     }
     let Some(v) = checks.validator.as_mut() else {
-        if t.list && checks.host.is_none() {
-            t.lines.push(format!("{}  emitted", label()));
-        }
         return;
     };
     match v.validate(&mut shader.dxil) {
@@ -1036,25 +939,4 @@ fn tally_structured(program: &ir::Program, s: &structure::Structured, t: &mut Ta
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
-}
-
-#[cfg(test)]
-mod tests {
-    /// Shader dumps are game-derived, so a dump directory in the repo is refused.
-    #[test]
-    fn emit_dump_inside_repo_is_refused() {
-        // SAFETY: no other test in this binary touches the environment.
-        unsafe { std::env::set_var("VICTORY_EMIT_DUMP", env!("CARGO_MANIFEST_DIR")) };
-        let missing = std::env::temp_dir().join("victory-translate-no-such-dir");
-        let err = super::run(vec![missing], false, false, false, Some(1)).unwrap_err();
-        // SAFETY: as above; unset so a later test's `run` is not refused.
-        unsafe { std::env::remove_var("VICTORY_EMIT_DUMP") };
-        assert!(
-            matches!(
-                err.downcast_ref(),
-                Some(victory_core::PolicyError::InsideRepo { .. })
-            ),
-            "{err}"
-        );
-    }
 }

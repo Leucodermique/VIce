@@ -570,69 +570,26 @@ impl TextureQueue {
     ///   25,000-40,000 while the textures of the shot on screen waited
     ///   (run 52: 98% of the drawn pixels had no colour texture in the
     ///   first 3D frames).
-    #[cfg_attr(not(test), allow(dead_code))]
     fn due(&self, frame: u64, max: usize) -> Vec<(u32, u64)> {
-        self.due_for(frame, max, true)
-    }
-
-    /// As [`TextureQueue::due`], with `room` saying whether the card can
-    /// allocate new textures. When `!room`, slots already uploaded
-    /// (rechecks and partly-mapped uploads) come first, followed by fresh
-    /// / remapped writes and then unuploaded `again` slots, and slots
-    /// recently refused while full (`refused_until > frame`) yield so a
-    /// fixed prefix cannot starve later slots behind the `refused > 256`
-    /// cap. As soon as `room` is true, `refused_until` is ignored.
-    fn due_for(&self, frame: u64, max: usize, room: bool) -> Vec<(u32, u64)> {
-        let newest_first = |a: &(u64, u32, u64), b: &(u64, u32, u64)| b.2.cmp(&a.2);
-        let push_interleaved = |fresh: &[(u64, u32, u64)], order: &mut Vec<(u32, u64)>| {
-            let (mut new, mut old) = (0, fresh.len());
-            while new < old && order.len() < max {
-                order.push((fresh[new].1, fresh[new].2));
-                new += 1;
-                if new < old && order.len() < max {
-                    old -= 1;
-                    order.push((fresh[old].1, fresh[old].2));
-                }
-            }
-        };
-        if room {
-            let mut again: Vec<(u64, u32, u64)> = Vec::new();
-            let mut fresh: Vec<(u64, u32, u64)> = Vec::new();
-            for (&index, w) in self.slots.iter().filter(|(_, w)| w.due <= frame) {
-                let class = if w.looks > 0 || w.mapped > 0 { &mut again } else { &mut fresh };
-                class.push((w.written, index, w.write));
-            }
-            again.sort_unstable_by(newest_first);
-            fresh.sort_unstable_by(newest_first);
-            let mut order: Vec<(u32, u64)> = again.iter().map(|&(_, index, write)| (index, write)).collect();
-            push_interleaved(&fresh, &mut order);
-            order.truncate(max);
-            return order;
-        }
-        let mut active: Vec<(u64, u32, u64)> = Vec::new();
+        let mut again: Vec<(u64, u32, u64)> = Vec::new();
         let mut fresh: Vec<(u64, u32, u64)> = Vec::new();
-        let mut waiting: Vec<(u64, u32, u64)> = Vec::new();
-        for (&index, w) in self
-            .slots
-            .iter()
-            .filter(|(_, w)| w.due <= frame && w.refused_until <= frame)
-        {
-            let class = if w.checked.2 != 0 || w.mapped > 0 {
-                &mut active
-            } else if w.looks == 0 {
-                &mut fresh
-            } else {
-                &mut waiting
-            };
+        for (&index, w) in self.slots.iter().filter(|(_, w)| w.due <= frame) {
+            let class = if w.looks > 0 || w.mapped > 0 { &mut again } else { &mut fresh };
             class.push((w.written, index, w.write));
         }
-        active.sort_unstable_by(newest_first);
+        // By the number of the write, counted over the run.
+        let newest_first = |a: &(u64, u32, u64), b: &(u64, u32, u64)| b.2.cmp(&a.2);
+        again.sort_unstable_by(newest_first);
         fresh.sort_unstable_by(newest_first);
-        waiting.sort_unstable_by(newest_first);
-        let mut order: Vec<(u32, u64)> = active.iter().map(|&(_, index, write)| (index, write)).collect();
-        push_interleaved(&fresh, &mut order);
-        if order.len() < max {
-            order.extend(waiting.iter().map(|&(_, index, write)| (index, write)));
+        let mut order: Vec<(u32, u64)> = again.iter().map(|&(_, index, write)| (index, write)).collect();
+        let (mut new, mut old) = (0, fresh.len());
+        while new < old && order.len() < max {
+            order.push((fresh[new].1, fresh[new].2));
+            new += 1;
+            if new < old && order.len() < max {
+                old -= 1;
+                order.push((fresh[old].1, fresh[old].2));
+            }
         }
         order.truncate(max);
         order
@@ -656,19 +613,6 @@ impl TextureQueue {
         if let Some(w) = self.same(index, write) {
             w.due = frame + (1u64 << w.looks.min(16)).min(most.max(1));
             w.looks = w.looks.saturating_add(1);
-            w.refused_until = 0;
-            w.full_waits = 0;
-        }
-    }
-
-    /// Slot `index` could not be allocated because the card is full: yield
-    /// to other due slots while `!room` for 2, 4, 8, ... frames up to `most`
-    /// without altering `due` or `looks`.
-    fn full(&mut self, index: u32, write: u64, frame: u64, most: u64) {
-        if let Some(w) = self.same(index, write) {
-            let wait = (2u64 << w.full_waits.min(7)).min(most.max(1));
-            w.refused_until = frame.saturating_add(wait);
-            w.full_waits = w.full_waits.saturating_add(1);
         }
     }
 
@@ -708,7 +652,6 @@ impl TextureQueue {
     fn partly(&mut self, index: u32, write: u64, due: u64, mapped: u64) {
         if let Some(w) = self.same(index, write) {
             (w.due, w.looks, w.mapped) = (due, 0, mapped.max(1));
-            (w.refused_until, w.full_waits) = (0, 0);
         }
     }
 
@@ -1140,27 +1083,21 @@ impl HostHeap {
         let enough = self.free.load(std::sync::atomic::Ordering::Relaxed) >= n
             && n < self.too_long.load(std::sync::atomic::Ordering::Relaxed);
         let n = n as usize;
-        // Search from `next` on, then from the start (extending past cursor by
-        // n - 1 so contiguous runs crossing the cursor are not missed).
-        let cursor = *next as usize;
-        let end = self.dynamic as usize;
-        let second_end = cursor.saturating_add(n.saturating_sub(1)).min(end);
-        let starts = (cursor..end).chain(0..second_end);
+        // Search from `next` on, then from the start.
+        let starts = (*next as usize..self.dynamic as usize).chain(0..*next as usize);
         let mut run = 0;
         let mut found = None;
         let mut last = usize::MAX;
-        if enough {
-            for at in starts {
-                // A run cannot wrap past the end.
-                if at != last.wrapping_add(1) {
-                    run = 0;
-                }
-                last = at;
-                run = if taken[at] { 0 } else { run + 1 };
-                if run == n {
-                    found = Some(at + 1 - n);
-                    break;
-                }
+        for at in starts.take(if enough { DYNAMIC as usize } else { 0 }) {
+            // A run cannot wrap past the end.
+            if at != last.wrapping_add(1) {
+                run = 0;
+            }
+            last = at;
+            run = if taken[at] { 0 } else { run + 1 };
+            if run == n {
+                found = Some(at + 1 - n);
+                break;
             }
         }
         let Some(first) = found else {
@@ -1212,30 +1149,9 @@ impl HostHeap {
     /// with its write number, in the order to serve them
     /// ([`TextureQueue::due`]), and the queue's counts
     /// ([`TextureQueue::census`]).
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn texture_slots_due(&self, frame: u64, max: usize) -> (Vec<(u32, u64)>, [u64; 5]) {
-        self.texture_slots_due_for(frame, max, true)
-    }
-
-    /// As [`HostHeap::texture_slots_due`], accounting for whether the card
-    /// currently has `room` for new textures ([`TextureQueue::due_for`]).
-    pub(crate) fn texture_slots_due_for(&self, frame: u64, max: usize, room: bool) -> (Vec<(u32, u64)>, [u64; 5]) {
         let textures = self.textures.lock().unwrap_or_else(|e| e.into_inner());
-        (if max == 0 { Vec::new() } else { textures.due_for(frame, max, room) }, textures.census(frame))
-    }
-
-    /// Every title slot of the queue that is due at `frame`, and whether
-    /// it was uploaded before (in part, or whole and waiting for another
-    /// look): for the card accounting line
-    /// (`crate::resource::card_accounting`).
-    pub(crate) fn texture_slots_all_due(&self, frame: u64) -> Vec<(u32, bool)> {
-        let textures = self.textures.lock().unwrap_or_else(|e| e.into_inner());
-        textures
-            .slots
-            .iter()
-            .filter(|(_, w)| w.due <= frame)
-            .map(|(&index, w)| (index, w.mapped > 0 || w.checked.2 != 0))
-            .collect()
+        (if max == 0 { Vec::new() } else { textures.due(frame, max) }, textures.census(frame))
     }
 
     /// Every title slot of the queue that is due at `frame`, and whether
@@ -3092,16 +3008,7 @@ fn keep_views() -> bool {
 fn same_placed_texture(a: &View, b: &View) -> bool {
     match (a, b) {
         (View::Placed(false, resource, desc), View::Placed(false, other, other_desc)) => {
-            if resource[0] == 1 || desc[10..12] != other_desc[10..12] {
-                return false;
-            }
-            // Words 1 and 13 are struct padding carrying uninitialized title
-            // stack bytes; zero them to match `resource::texture_at` and
-            // `resource::placed_known`.
-            let mut a_key = *resource;
-            let mut b_key = *other;
-            (a_key[1], a_key[13], b_key[1], b_key[13]) = (0, 0, 0, 0);
-            a_key == b_key
+            resource[0] != 1 && resource == other && desc[10..12] == other_desc[10..12]
         }
         _ => false,
     }
@@ -3379,15 +3286,6 @@ mod tests {
         let low = view(texture, 3, 0x1000_0000);
         // more mips of the same texture
         assert!(same_placed_texture(&low, &view(texture, 0, 0x1000_0000)));
-        // differing uninitialized stack garbage in filler words [1] and [13]
-        let mut dirty_a = texture;
-        (dirty_a[1], dirty_a[13]) = (0x1111_2222, 0x3333_4444);
-        let mut dirty_b = texture;
-        (dirty_b[1], dirty_b[13]) = (0x5555_6666, 0x7777_8888);
-        assert!(same_placed_texture(
-            &view(dirty_a, 3, 0x1000_0000),
-            &view(dirty_b, 0, 0x1000_0000),
-        ));
         // another address, another description, a buffer, an unordered view
         assert!(!same_placed_texture(&low, &view(texture, 3, 0x2000_0000)));
         let mut wider = texture;
@@ -3843,33 +3741,6 @@ mod tests {
         heap.release(a, 50);
         assert_eq!(heap.dynamic(50), Some(4));
         assert_eq!(heap.dynamic(40), Some(4 + heap.dynamic - 40));
-    }
-
-    #[test]
-    fn dynamic_search_can_find_a_run_across_the_cursor() {
-        let Some(heap) = HostHeap::new(false, 4) else {
-            eprintln!("no host descriptor heap; skipped");
-            return;
-        };
-        let first = heap.dynamic(1).unwrap();
-        let left = heap.dynamic(2).unwrap();
-        let right = heap.dynamic(2).unwrap();
-        let rest = heap.dynamic(heap.dynamic - 5).unwrap();
-        assert_eq!((first, left, right, rest), (4, 5, 7, 9));
-
-        // Reallocating the left half puts the cursor back in the middle.
-        heap.release(left, 2);
-        assert_eq!(heap.dynamic(2), Some(left));
-        heap.release(left, 2);
-        heap.release(right, 2);
-        assert_eq!(heap.dynamic(4), Some(left));
-        assert_eq!(heap.dynamic(1), None);
-
-        // A free slot at each physical end does not form a two-slot range.
-        heap.release(first, 1);
-        let last = first + heap.dynamic - 1;
-        heap.release(last, 1);
-        assert_eq!(heap.dynamic(2), None);
     }
 }
 

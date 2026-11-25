@@ -127,9 +127,6 @@ fn staging_buffer(host: &crate::host::Host, total: u64) -> Option<(ID3D12Resourc
     host.upload_buffer(size).map(|(buffer, data)| (buffer, data, size))
 }
 
-/// How long a texture whose hash changed is hashed at every check.
-const LIVE_FRAMES: u64 = 30;
-
 /// What a texture's staging buffer holds: the hash of the memory detiled
 /// (memory not watched), or the write-watch asking it was detiled after.
 #[derive(Default)]
@@ -138,8 +135,6 @@ struct Last {
     asked: u64,
     /// The frame a partly mapped texture was last read in.
     partial: Option<u64>,
-    /// The frame a hash last found the texture changed in.
-    changed: Option<u64>,
 }
 
 // SAFETY: the staging mapping is written only at submission, under
@@ -378,11 +373,7 @@ pub(crate) fn alias(list: &HostList, placed: This, source: This) -> bool {
 /// is remapping may show a frame later. It never shows partly read.
 fn no_wait() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| {
-        std::env::var("VICTORY_TEXTURE_NO_WAIT")
-            .ok()
-            .is_none_or(|v| v.trim() != "0")
-    })
+    *ON.get_or_init(|| std::env::var_os("VICTORY_TEXTURE_NO_WAIT").is_some_and(|v| v == "1"))
 }
 
 /// Since the last frame-rate line, with [`no_wait`]: refreshes that read
@@ -1032,14 +1023,8 @@ impl Staging {
             const HASH_EVERY: u64 = 8;
             let unwritten = last.asked != 0 && written.iter().all(|&(_, w)| w <= last.asked);
             last.asked = now;
-            let frame = crate::frame::current();
-            let turn = frame.wrapping_add((start >> 16) as u64).is_multiple_of(HASH_EVERY);
-            // A texture that changed lately is hashed at every check: the
-            // guard misses writes through another view (a video decoder
-            // filling a ring of frames), and every eighth frame showed such
-            // a ring out of order.
-            let live = last.changed.is_some_and(|at| frame < at + LIVE_FRAMES);
-            if unwritten && !turn && !live {
+            let turn = crate::frame::current().wrapping_add((start >> 16) as u64).is_multiple_of(HASH_EVERY);
+            if unwritten && !turn {
                 return 0;
             }
         }
@@ -1104,7 +1089,6 @@ impl Staging {
                     return size;
                 }
                 last.hash = Some(hash);
-                last.changed = Some(crate::frame::current());
                 self.detile(tiled);
                 #[cfg(feature = "diagnostics")]
                 crate::copystat::add(crate::copystat::C::TexChanged, size as u64);
@@ -1121,7 +1105,6 @@ impl Staging {
             return size;
         }
         last.hash = Some(hash);
-        last.changed = Some(crate::frame::current());
         self.detile(tiled);
         #[cfg(feature = "diagnostics")]
         crate::copystat::add(crate::copystat::C::TexChanged, size as u64);

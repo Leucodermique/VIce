@@ -557,8 +557,6 @@ pub(crate) static HEAP_TEXTURES_QUEUE: [AtomicU64; 5] = [const { AtomicU64::new(
 /// as before, they counted as not there at all).
 pub(crate) static HEAP_TEXTURES_PARTLY: [AtomicU64; 3] = [const { AtomicU64::new(0) }; 3];
 static DROPPED: AtomicU64 = AtomicU64::new(0);
-/// Dispatches that waited for their pipeline after the frame's wait ([`State::dispatch`]).
-pub(crate) static COMPUTE_WAITS: AtomicU64 = AtomicU64::new(0);
 
 /// Marks the last traced draw as not run on the host.
 #[cfg(feature = "diagnostics")]
@@ -2347,20 +2345,7 @@ impl State {
             }
             return;
         }
-        let made = crate::pipeline::host_pipeline(self.pipeline as This).or_else(|| {
-            if !crate::pipeline::compute_waits() {
-                return None;
-            }
-            let started = std::time::Instant::now();
-            let made = crate::pipeline::host_pipeline_now(self.pipeline as This);
-            COMPUTE_WAITS.fetch_add(1, Ordering::Relaxed);
-            once!(
-                ms = started.elapsed().as_millis() as u64,
-                "a dispatch waited for its pipeline to be made instead of being dropped (VICTORY_COMPUTE_WAIT=0 drops it)"
-            );
-            made
-        });
-        let Some(p) = made else {
+        let Some(p) = crate::pipeline::host_pipeline(self.pipeline as This) else {
             once!(
                 pipeline = format_args!("{:#x}", self.pipeline),
                 "a dispatch without a host pipeline dropped"
@@ -4027,26 +4012,6 @@ const RECTANGLES: u32 = 17;
 const LINE_LOOP: u32 = 18;
 const QUADS: u32 = 19;
 const QUAD_STRIP: u32 = 20;
-
-/// Whether `view` already resolves to a live on-card host copy (`copy_state == 2`),
-/// so updating its descriptor slot or re-uploading into it allocates zero new
-/// VRAM even when the title rewrote the descriptor (e.g., sharper mip-streaming
-/// view or another slot sharing the same placed texture).
-fn view_has_live_host_texture(view: Option<View>) -> bool {
-    match view {
-        Some(View::Placed(false, resource, desc)) if resource[0] != 1 => {
-            let address = u64::from(desc[10]) | u64::from(desc[11]) << 32;
-            crate::resource::placed_known(address, &resource)
-                .and_then(crate::resource::copy_state)
-                .is_some_and(|(state, _, _)| state == 2)
-        }
-        Some(View::Shader(object, _)) if crate::resource::title_fills(object as This) => {
-            crate::resource::copy_state(object as This)
-                .is_some_and(|(state, _, _)| state == 2)
-        }
-        _ => false,
-    }
-}
 
 /// Fixed-function state, straight onto the host list.
 pub(crate) fn viewports(list: &HostList, viewports: &[D3D12_VIEWPORT]) {

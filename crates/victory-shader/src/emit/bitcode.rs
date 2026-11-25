@@ -56,11 +56,8 @@ struct Global {
     /// Its pointer type.
     ptr: Ty,
     space: u32,
-    /// An internal global with this initialiser (a constant table, or the
-    /// undefined start of a private array).
+    /// An internal constant with this initialiser (a constant table).
     init: Option<u32>,
-    /// Read-only: the initialiser is a constant table.
-    constant: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -373,7 +370,6 @@ impl Module {
             ptr,
             space,
             init: None,
-            constant: false,
         });
         V::Global(self.globals.len() as u32 - 1)
     }
@@ -384,20 +380,6 @@ impl Module {
             panic!("a global initialised with a non-constant")
         };
         let ty = self.consts[i as usize].0;
-        let g = self.global(name, ty, 0);
-        if let V::Global(n) = g {
-            self.globals[n as usize].init = Some(i);
-            self.globals[n as usize].constant = true;
-        }
-        g
-    }
-
-    /// An internal global of `ty` in the default address space that the
-    /// shader writes and reads back: private to each thread, undefined at
-    /// the start.
-    pub fn private_global(&mut self, name: &str, ty: Ty) -> V {
-        let init = self.undef(ty);
-        let V::Const(i) = init else { unreachable!() };
         let g = self.global(name, ty, 0);
         if let V::Global(n) = g {
             self.globals[n as usize].init = Some(i);
@@ -648,7 +630,7 @@ impl Module {
             // + 1, linkage (external 0, internal 3), log2 alignment + 1,
             // section]
             let (constant, init, linkage) = match g.init {
-                Some(i) => (u64::from(g.constant), first_const + u64::from(i) + 1, 3),
+                Some(i) => (1, first_const + u64::from(i) + 1, 3),
                 None => (0, 0, 0),
             };
             w.record(
@@ -756,7 +738,7 @@ impl Module {
             let blk = &self.blocks[b];
             if let (Some(Term::Br(h)), true, [p]) = (
                 blk.term,
-                blk.phis.iter().all(|&i| !live[i as usize]) && blk.body.is_empty(),
+                blk.phis.is_empty() && blk.body.is_empty(),
                 &preds[b][..],
             ) && pos[h] < pos[b]
                 && !succs(*p).contains(&h)
@@ -1223,45 +1205,6 @@ mod tests {
         assert!(live[ids(read)] && live[ids(sum)]);
         assert!(!live[ids(unread)] && !live[ids(cyc_a)] && !live[ids(cyc_b)]);
         assert_eq!(live, live_by_passes(&m));
-    }
-
-    #[test]
-    fn empty_latch_with_dead_phis_is_folded() {
-        // Two identical loops except one has an unread phi in its empty latch;
-        // both must fold the latch and emit identical bitcode.
-        let build = |with_dead_phi: bool| {
-            let mut m = Module::default();
-            let i32t = m.int(32);
-            let void = m.void();
-            let fty = m.func_ty(void, vec![i32t]);
-            let f = m.function("sink", fty, Some(Attr::NoUnwind), false);
-            let main_ty = m.func_ty(void, vec![]);
-            m.function("main", main_ty, None, true);
-            let (entry, head, body, latch, exit) = (
-                m.new_block(),
-                m.new_block(),
-                m.new_block(),
-                m.new_block(),
-                m.new_block(),
-            );
-            let (z, one, ten) = (m.i32(0), m.i32(1), m.i32(10));
-            m.terminate(entry, Term::Br(head));
-            let i = m.phi(head, i32t);
-            m.terminate(head, Term::Br(body));
-            let next = m.bin(body, Bin::Add, i, one);
-            let cond = m.cmp(body, pred::IULT, next, ten);
-            m.terminate(body, Term::CondBr(cond, latch, exit));
-            if with_dead_phi {
-                let dead = m.phi(latch, i32t);
-                m.set_phi(dead, vec![(next, body)]);
-            }
-            m.terminate(latch, Term::Br(head));
-            m.set_phi(i, vec![(z, entry), (next, latch)]);
-            let _ = m.call(exit, f, vec![next]);
-            m.terminate(exit, Term::Ret);
-            m.write()
-        };
-        assert_eq!(build(false), build(true));
     }
 
     #[test]

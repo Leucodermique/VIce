@@ -723,21 +723,6 @@ fn ps_io(data: &[u8], code_len: usize) -> Result<StageIo, ShaderError> {
     })
 }
 
-fn vs_outputs(data: &[u8]) -> Result<Vec<VsOutput>, ShaderError> {
-    Ok(semantics(data, VS_OUTPUTS, 6, VS_OUTPUT_COUNT)?
-        .as_chunks::<6>()
-        .0
-        .iter()
-        .map(|e| VsOutput {
-            usage: Usage::from_raw(e[0]),
-            row: e[1],
-            param: e[2],
-            fp16: e[5] & 1 != 0,
-            pack2: e[5] & 2 != 0,
-        })
-        .collect())
-}
-
 fn vs_io(data: &[u8]) -> Result<StageIo, ShaderError> {
     let inputs = semantics(data, VS_INPUTS, 5, VS_INPUT_COUNT)?
         .as_chunks::<5>()
@@ -750,12 +735,25 @@ fn vs_io(data: &[u8]) -> Result<StageIo, ShaderError> {
             vgpr: e[3],
         })
         .collect();
-    let outputs = vs_outputs(data)?;
+    let outputs = semantics(data, VS_OUTPUTS, 6, VS_OUTPUT_COUNT)?
+        .as_chunks::<6>()
+        .0
+        .iter()
+        .map(|e| VsOutput {
+            usage: Usage::from_raw(e[0]),
+            row: e[1],
+            param: e[2],
+            fp16: e[5] & 1 != 0,
+            pack2: e[5] & 2 != 0,
+        })
+        .collect();
     Ok(StageIo::Vs { inputs, outputs })
 }
 
 fn ms_io(data: &[u8], lds_bytes: u32) -> Result<StageIo, ShaderError> {
-    let outputs = vs_outputs(data)?;
+    let StageIo::Vs { outputs, .. } = vs_io(data)? else {
+        unreachable!()
+    };
     let info = data
         .get(MS_INFO..MS_INFO + 8)
         .ok_or(Malformed("stage data out of bounds"))?;
@@ -802,7 +800,7 @@ fn bytes(data: &[u8], offset: u64, len: u64) -> Option<&[u8]> {
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+mod tests {
     use super::*;
 
     const VS_CODE: [u8; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
@@ -834,11 +832,6 @@ pub(crate) mod tests {
 
     /// FSSM blob with `programs` as (stage, code) pairs.
     fn fssm(programs: &[(HwStage, &[u8])]) -> Vec<u8> {
-        fssm_lds(programs, 0)
-    }
-
-    /// [`fssm`] with every record's LDS byte count set.
-    pub(crate) fn fssm_lds(programs: &[(HwStage, &[u8])], lds: u32) -> Vec<u8> {
         let mut payload = GRAPHICS_SLOT_COUNT.to_le_bytes().to_vec();
         payload.resize(slot(HwStage::Cs) + 8, 0);
         for (_, at) in SLOTS {
@@ -854,8 +847,7 @@ pub(crate) mod tests {
             let flags = if stage == HwStage::Ps { FLAG_WAVE32 } else { 0 };
             payload.extend_from_slice(&[0; 4]);
             payload.extend_from_slice(&flags.to_le_bytes());
-            payload.resize(record as usize + RECORD_LDS, 0);
-            payload.extend_from_slice(&lds.to_le_bytes());
+            payload.resize(record as usize + RECORD_REGS, 0);
             payload.extend_from_slice(&(VGPRS | 31 << 20).to_le_bytes());
             payload.extend_from_slice(&empty_stage_data());
             payload.extend_from_slice(code);
@@ -897,47 +889,6 @@ pub(crate) mod tests {
             out.extend_from_slice(blob);
         }
         out
-    }
-
-    /// A shader container whose `DXIL` part holds one native blob with the
-    /// given programs (stage and code), as the title's containers do.
-    pub(crate) fn container(programs: &[(HwStage, &[u8])]) -> Vec<u8> {
-        container_lds(programs, 0)
-    }
-
-    /// [`container`] with more parts next to the `DXIL` one (signatures).
-    pub(crate) fn container_parts(
-        programs: &[(HwStage, &[u8])],
-        extra: &[(crate::dxbc::FourCC, &[u8])],
-    ) -> Vec<u8> {
-        let data = part(&[(KIND_NATIVE, &xbch(&fssm_lds(programs, 0)))]);
-        let mut parts = vec![(crate::dxbc::FourCC::DXIL, &data[..])];
-        parts.extend_from_slice(extra);
-        crate::dxbc::build(&parts)
-    }
-
-    /// [`container`] whose records say they allocate `lds` bytes of LDS.
-    pub(crate) fn container_lds(programs: &[(HwStage, &[u8])], lds: u32) -> Vec<u8> {
-        let data = part(&[(KIND_NATIVE, &xbch(&fssm_lds(programs, lds)))]);
-        crate::dxbc::build(&[(crate::dxbc::FourCC::DXIL, &data)])
-    }
-
-    #[test]
-    fn the_halves_of_a_merged_stage_carry_their_lds_size() {
-        // The two halves are in different containers: ES next to the VS
-        // (here alone), GS by itself. The LDS size is the common record's.
-        let read = |stage, lds| {
-            let blob = xbch(&fssm_lds(&[(stage, &VS_CODE)], lds));
-            native_programs(&part(&[(KIND_NATIVE, &blob)])).unwrap().remove(0)
-        };
-        let (es, gs) = (read(HwStage::Es, 0x3000), read(HwStage::Gs, 0x2800));
-        assert_eq!((es.stage, &es.io), (HwStage::Es, &StageIo::Es(MergedIo { lds_bytes: 0x3000 })));
-        assert_eq!((gs.stage, &gs.io), (HwStage::Gs, &StageIo::Gs(MergedIo { lds_bytes: 0x2800 })));
-        // A record that allocates none says so.
-        assert_eq!(read(HwStage::Gs, 0).io, StageIo::Gs(MergedIo::default()));
-        // Both are merged stages: user data starts after the 8 system SGPRs.
-        assert_eq!(HwStage::Gs.user_sgpr(0), 8);
-        assert_eq!(HwStage::Es.user_sgpr(0), 8);
     }
 
     #[test]
@@ -1119,16 +1070,6 @@ pub(crate) mod tests {
                 lds_bytes: 16,
             })
         );
-    }
-
-    #[test]
-    fn mesh_stage_io_ignores_unused_vs_input_count() {
-        let mut blob = fssm(&[(HwStage::Ms, &VS_CODE)]);
-        let e = stage_data_at(&blob, HwStage::Ms);
-        // Mesh stage data has no vertex inputs; E+0xc4 is unused by MS.
-        blob[e + VS_INPUT_COUNT..][..4].copy_from_slice(&u32::MAX.to_le_bytes());
-        let p = &native_programs(&part(&[(KIND_NATIVE, &xbch(&blob))])).unwrap()[0];
-        assert!(matches!(p.io, StageIo::Ms(_)));
     }
 
     #[test]

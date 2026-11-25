@@ -1,8 +1,7 @@
 //! One-to-one SSA form of a native program (decision 0003, step 1).
 //!
 //! Every machine instruction becomes one [`Inst`], except scheduling-only
-//! ones (`s_nop`, `s_waitcnt*`, `s_inst_prefetch`...) and redundant conditional
-//! branches.
+//! ones (`s_nop`, `s_waitcnt*`, `s_inst_prefetch`...), which are dropped.
 //! Each register dword is a variable: a read names the [`Value`] it sees, a
 //! write defines a new one, and [`Phi`]s merge values where control flow
 //! joins. Nothing is raised: an instruction keeps its opcode and decoded
@@ -207,15 +206,6 @@ pub fn build(code: &[u8], wave64: bool, vgprs: u16) -> Result<Program, ShaderErr
             (*to, *from) = (parked[k].1, parked[k].2);
         }
         let fallthrough = || block_at(next.ok_or(isa(machine.offset, "falls off the code"))?);
-        // A conditional SOPP branch to fallthrough has no register effects
-        // and contributes one edge to the join. Calls also use Flow::Branch
-        // but write a return address.
-        if machine.encoding == gfx10::Encoding::Sopp
-            && matches!(flow, Flow::Branch(target) if Some(target) == next)
-        {
-            blocks[b].exit = Exit::Jump(fallthrough()?);
-            continue;
-        }
         let ends = flow != Flow::Next || next.is_none_or(|n| leaders.binary_search(&n).is_ok());
         if ends {
             blocks[b].exit = match flow {
@@ -472,7 +462,12 @@ fn unspill(
     }
     let code_of = |reg: u8, lane: u32| codes.iter().find(|c| c.0 == (reg, lane)).map(|c| c.1);
     let put = |list: &mut [gfx10::Instruction], i: usize, encoding, opcode: u16, word: u32| {
-        list[i] = gfx10::Instruction::new(list[i].offset, encoding, opcode, vec![word]);
+        list[i] = gfx10::Instruction {
+            offset: list[i].offset,
+            encoding,
+            opcode,
+            words: vec![word],
+        };
     };
     // `s_mov_b32` / `s_mov_b64 dst, src` (SOP1, opcodes 3 and 4); `s_nop`. A code
     // from `PARKED` up does not fit the word: s0 stands in for it there.
@@ -871,8 +866,9 @@ pub(crate) fn whole_sections(p: &Program) -> Option<Program> {
 /// The program without its early-outs: an `s_cbranch_execz` to a block that
 /// only ends the program (`if (!inBounds) return;`, the outermost branch of
 /// most compute programs) is left out, so the lanes that would have left
-/// walk the body with EXEC clear. The region must keep EXEC clear, so a
-/// scalar restore there cannot activate vector operations for those lanes. The
+/// walk the body with EXEC clear. Vector instructions and every effect are
+/// masked by EXEC already, as on the console, where the branch is taken
+/// only when no lane of the wave is left; scalar code has no effects. The
 /// body is then code every lane runs, which a console wave run as two host
 /// waves needs for the barriers of its exchanges and LDS accesses.
 /// `None` if the program has no such branch.
@@ -883,12 +879,11 @@ pub(crate) fn without_early_outs(p: &Program) -> Option<Program> {
     };
     let mut blocks = p.blocks.clone();
     let mut any = false;
-    for (b, block) in blocks.iter_mut().enumerate() {
+    for block in &mut blocks {
         let Exit::Branch { taken, not_taken } = block.exit else {
             continue;
         };
-        if ends(taken) && block.insts.last().is_some_and(|i| i.name() == "s_cbranch_execz")
-            && skipped_region(p, b, not_taken, taken).is_some_and(|(region, _)| walks_with_empty_exec(p, &region)) {
+        if ends(taken) && block.insts.last().is_some_and(|i| i.name() == "s_cbranch_execz") {
             block.insts.pop();
             block.exit = Exit::Jump(not_taken);
             any = true;
@@ -984,7 +979,29 @@ pub(crate) fn without_skips(p: &Program, deep: bool) -> Option<Program> {
         }
         v
     };
-    let scalars_unchanged = |b: usize, target: usize, inside: &[bool]| {
+    // The region a skip of `b` to `target` leaves out, if it is a pure skip.
+    let skipped = |b: usize, target: usize, first: usize| -> Option<Vec<bool>> {
+        let mut inside = vec![false; n];
+        let mut stack = vec![first];
+        while let Some(x) = stack.pop() {
+            if x == target || inside[x] {
+                continue;
+            }
+            if x == b {
+                return None; // a loop back to the branch
+            }
+            inside[x] = true;
+            match p.blocks[x].exit {
+                Exit::End | Exit::Indirect => return None,
+                exit => stack.extend(exit.successors()),
+            }
+        }
+        // entered only through the branch
+        for x in (0..n).filter(|&x| inside[x]) {
+            if p.blocks[x].preds.iter().any(|&q| q != b && !inside[q]) {
+                return None;
+            }
+        }
         // the join sees no scalar the region changed
         let join = &p.blocks[target];
         for phi in &join.phis {
@@ -1001,13 +1018,16 @@ pub(crate) fn without_skips(p: &Program, deep: bool) -> Option<Program> {
                 join.preds.iter().zip(&phi.args).filter(|(q, _)| **q == b).map(|(_, a)| root(*a)).collect();
             let within = join.preds.iter().zip(&phi.args).filter(|(q, _)| inside[**q]).map(|(_, a)| root(*a));
             if within.into_iter().any(|a| !before.contains(&a)) {
-                return false;
+                return None;
             }
         }
         // Other ways into the join than the branch and the region (an inner branch that ends
         // together with an outer one) change nothing in that: the lanes that would have
         // skipped arrive from the region instead, with the same scalars.
-        deep || join.preds.iter().all(|&q| q == b || inside[q])
+        if !deep && join.preds.iter().any(|&q| q != b && !inside[q]) {
+            return None;
+        }
+        Some(inside)
     };
     let mut blocks = p.blocks.clone();
     let mut any = false;
@@ -1018,9 +1038,7 @@ pub(crate) fn without_skips(p: &Program, deep: bool) -> Option<Program> {
         if !p.blocks[b].insts.last().is_some_and(|i| i.name() == "s_cbranch_execz") {
             continue;
         }
-        let Some((region, inside)) = skipped_region(p, b, not_taken, taken) else { continue };
-        let pure = region.iter().all(|&x| !matches!(p.blocks[x].exit, Exit::End | Exit::Indirect));
-        if (ends(taken) || pure && scalars_unchanged(b, taken, &inside)) && walks_with_empty_exec(p, &region) {
+        if ends(taken) || skipped(b, taken, not_taken).is_some() {
             blocks[b].insts.pop();
             blocks[b].exit = Exit::Jump(not_taken);
             any = true;
@@ -1359,28 +1377,13 @@ fn liveness(blocks: &[Block], order: &[usize]) -> (Vec<RegSet>, Vec<RegSet>) {
 /// Phis are placed for every live register at every join; those whose
 /// arguments are all one value (or the phi itself) are replaced by it.
 fn remove_trivial_phis(blocks: &mut [Block], values: u32) {
-    remove_trivial_phis_steps(blocks, values);
-}
-
-fn remove_trivial_phis_steps(blocks: &mut [Block], values: u32) -> usize {
-    fn find(replaced: &mut [Value], v: Value, steps: &mut usize) -> Value {
-        let mut root = v;
-        while replaced[root.0 as usize] != root {
-            *steps += 1;
-            root = replaced[root.0 as usize];
-        }
-        let mut cur = v;
-        while replaced[cur.0 as usize] != root {
-            *steps += 1;
-            let next = replaced[cur.0 as usize];
-            replaced[cur.0 as usize] = root;
-            cur = next;
-        }
-        root
-    }
-
     let mut replaced: Vec<Value> = (0..values).map(Value).collect();
-    let mut steps = 0usize;
+    let find = |replaced: &[Value], mut v: Value| {
+        while replaced[v.0 as usize] != v {
+            v = replaced[v.0 as usize];
+        }
+        v
+    };
     let mut changed = true;
     while changed {
         changed = false;
@@ -1388,7 +1391,7 @@ fn remove_trivial_phis_steps(blocks: &mut [Block], values: u32) -> usize {
             block.phis.retain(|phi| {
                 let mut only = None;
                 for &a in &phi.args {
-                    let a = find(&mut replaced, a, &mut steps);
+                    let a = find(&replaced, a);
                     if a == phi.value || Some(a) == only {
                         continue;
                     }
@@ -1407,16 +1410,15 @@ fn remove_trivial_phis_steps(blocks: &mut [Block], values: u32) -> usize {
     for block in blocks {
         for phi in &mut block.phis {
             for a in &mut phi.args {
-                *a = find(&mut replaced, *a, &mut steps);
+                *a = find(&replaced, *a);
             }
         }
         for inst in &mut block.insts {
             for (_, v) in &mut inst.reads {
-                *v = find(&mut replaced, *v, &mut steps);
+                *v = find(&replaced, *v);
             }
         }
     }
-    steps
 }
 
 /// Scheduling hints, performance counters and tracing: no effect on results.
@@ -1950,33 +1952,6 @@ mod tests {
         assert!(reads.iter().all(|b| b.preds.len() == 1 && b.phis.is_empty()));
         // a block with one way in is left as it is
         assert!(split_joins(&q, &[0]).is_none());
-    }
-
-    #[test]
-    fn an_empty_exec_skip_keeps_a_store_behind_a_mask_restore() {
-        // A comparison rejected all lanes, so the console skips the store. If
-        // the branch disappears, restoring the saved incoming EXEC runs it.
-        const RESTORE: u32 = 0xBEFE_040C; // s_mov_b64 exec, s[12:13]
-        const STORE: [u32; 2] = [0xD834_0000, 0x0000_0C00]; // ds_write_b32 v0, v12
-        let kept = skip(&[RESTORE, STORE[0], STORE[1]], &[]);
-        assert!(without_skips(&kept, false).is_none());
-        assert!(without_skips(&kept, true).is_none());
-        let early = build_words(
-            &[0x7D88_0000, 0xBE8C_246A, 0xBF88_0003, RESTORE, STORE[0], STORE[1], S_ENDPGM],
-            true,
-        );
-        assert!(without_early_outs(&early).is_none());
-        assert!(without_skips(&early, true).is_none());
-        // With no restore the store stays masked and the branch can go.
-        assert_eq!(skips(&without_skips(&skip(&STORE, &[]), true).unwrap()), 0);
-        // A nested save of the already-empty EXEC, restored from precisely
-        // that definition before the store, cannot enable any lanes.
-        let nested = skip(&[0xBE90_246A, 0xBEFE_0410, STORE[0], STORE[1]], &[]);
-        assert_eq!(skips(&without_skips(&nested, true).unwrap()), 0);
-        // OR-save also activates lanes if its operand was saved before
-        // the skip, even though it saves the (empty) current EXEC.
-        let activates = skip(&[0xBE90_250C, STORE[0], STORE[1]], &[]);
-        assert!(without_skips(&activates, true).is_none());
     }
 
     #[test]

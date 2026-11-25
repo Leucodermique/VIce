@@ -248,15 +248,8 @@ pub(crate) fn pc_format(format: u32) -> u32 {
 /// float RGBA stands in, with at least R9G9B9E5's precision and range.
 /// The title's pipelines and views of such targets name the stand-in too
 /// ([`view_format`], the host view checks).
-/// The shared-exponent HDR format R9G9B9E5 (67) is the same: the console
-/// renders to it and writes it as unordered access (in the Series S
-/// profile the title asks for a 1920x1080 target of it), the host only
-/// samples it, and the refused texture left the passes writing it invalid
-/// until the device was removed. R11G11B10_FLOAT stands in: the same three
-/// unsigned float channels in 32 bits, with 6/6/5-bit mantissas instead of
-/// 9.
 /// shortcut: copies between such a target and a texture the title fills
-/// itself in the original format are skipped ([`stands_in`]); convert them
+/// itself in the 16-bit format are skipped ([`stands_in`]); convert them
 /// if a pass turns out to need one.
 pub(crate) fn target_format(format: u32) -> u32 {
     const STAND_INS: [(u32, u32); 3] = [(86, 28), (115, 28), (67, 10)];
@@ -594,7 +587,7 @@ pub(crate) fn family(format: u32) -> u32 {
         (44, 47),
         (48, 52),
         (53, 59),
-        (60, 64),
+        (60, 65),
         (70, 72),
         (73, 75),
         (76, 78),
@@ -704,7 +697,8 @@ const NO_FOOTPRINT: PlacedFootprint = PlacedFootprint {
     row_pitch: 0,
 };
 
-/// One subresource's upload footprint (offset 0), row count and unpadded row size.
+/// One subresource's size in an upload buffer: footprint (offset 0), rows
+/// and bytes per row. Planes of depth-stencil formats are not told apart.
 fn subresource(desc: &ResourceDesc, index: u32) -> Option<(PlacedFootprint, u32, u64)> {
     const PITCH: u64 = 256;
     if desc.dimension == BUFFER {
@@ -724,18 +718,11 @@ fn subresource(desc: &ResourceDesc, index: u32) -> Option<(PlacedFootprint, u32,
     } else {
         u32::from(desc.depth_or_array_size).max(1)
     };
-    let mip = index % mips;
-    let plane = index / mips / slices;
-    let depth_stencil = matches!(desc.format, 19..=22 | 44..=47);
-    // Each plane contains all the mip levels and array slices. Depth and
-    // stencil copies use separate formats and 512-byte row alignment.
-    let (format, pitch_alignment) = match (depth_stencil, plane) {
-        (true, 0) => (39, 512), // DXGI_FORMAT_R32_TYPELESS
-        (true, 1) => (60, 512), // DXGI_FORMAT_R8_TYPELESS
-        (false, 0) => (desc.format, PITCH),
-        _ => return None,
-    };
-    let (element, block) = element(format)?;
+    let (mip, slice) = (index % mips, index / mips);
+    if slice >= slices {
+        return None;
+    }
+    let (element, block) = element(desc.format)?;
     let width = (desc.width >> mip).max(1).next_multiple_of(block);
     let height = (u64::from(desc.height) >> mip)
         .max(1)
@@ -748,18 +735,18 @@ fn subresource(desc: &ResourceDesc, index: u32) -> Option<(PlacedFootprint, u32,
     let row_size = width / block * element;
     let footprint = PlacedFootprint {
         offset: 0,
-        format,
+        format: desc.format,
         width: u32::try_from(width).ok()?,
         height: u32::try_from(height).ok()?,
         depth,
-        row_pitch: u32::try_from(row_size.next_multiple_of(pitch_alignment)).ok()?,
+        row_pitch: u32::try_from(row_size.next_multiple_of(PITCH)).ok()?,
     };
     Some((footprint, u32::try_from(height / block).ok()?, row_size))
 }
 
-/// Places subresources at 512-byte boundaries in an upload buffer.
-/// Row pitch is aligned to 512 bytes for depth/stencil planes and 256 bytes
-/// otherwise. Unknown sizes give the documented all-ones values.
+/// Device method: where each subresource goes in an upload buffer, rows
+/// 256-byte and subresources 512-byte aligned, as on PC. Unknown sizes give
+/// the documented all-ones values.
 pub(crate) extern "system" fn copyable_footprints(
     _: This,
     desc: *const ResourceDesc,
@@ -1444,23 +1431,6 @@ pub(crate) fn room() -> bool {
     if filled < FLOOR {
         return true;
     }
-    // Past the card's own memory, into the PC's memory the system shares
-    // with it (`VICTORY_TEXTURE_SPILL=0`: the card's alone, as before): up
-    // to half the shared budget, the rest left to the title. On a 6 GB card
-    // the card's nine tenths were reached in the world's first frames, and
-    // the textures still waiting (skin, walls, clothes: 9,000-27,000 slots)
-    // were sampled empty, black in the G-buffer's albedo; with the shared
-    // memory taken too the same shots had their faces and walls. A texture
-    // there is read over the bus: slower, not missing.
-    static SPILL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    let spill = *SPILL.get_or_init(|| std::env::var_os("VICTORY_TEXTURE_SPILL").is_none_or(|v| v != "0"));
-    static SPILL_PERCENT: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
-    let spill_pct = *SPILL_PERCENT.get_or_init(|| {
-        std::env::var("VICTORY_TEXTURE_SPILL_PERCENT")
-            .ok()
-            .and_then(|v| v.trim().parse::<u64>().ok())
-            .map_or(75, |p| p.clamp(0, 95))
-    });
     match crate::host::host().and_then(|h| h.video_memory()) {
         // What is kept for card copies of title buffers not made yet
         // (`crate::shadow::card_room_kept`) and for the render targets a
@@ -2259,12 +2229,6 @@ pub(crate) fn texture_memory(this: This) -> Option<(*const u8, ResourceDesc)> {
     (r.desc.dimension != BUFFER).then(|| (r.data().cast_const(), r.desc))
 }
 
-/// A texture's width, height and format as the title described it; `None`
-/// for buffers. Makes no host copy.
-pub(crate) fn texture_size(this: This) -> Option<(u64, u32, u32)> {
-    texture_memory(this).map(|(_, d)| (d.width, d.height, d.format))
-}
-
 /// A buffer's host memory and size; `None` for textures.
 pub(crate) fn buffer_bytes(this: This) -> Option<(*mut u8, u64)> {
     if this.is_null() {
@@ -2855,62 +2819,9 @@ static RESOURCE_FUNCTIONS: Table<32> = {
 };
 
 #[cfg(test)]
-pub(crate) fn test_buffer(width: u64) -> This {
-    let heap = HeapProperties {
-        kind: 1,
-        cpu_pages: 0,
-        pool: 0,
-        creation_nodes: 0,
-        visible_nodes: 0,
-    };
-    let desc = ResourceDesc {
-        dimension: BUFFER,
-        alignment: 0,
-        width,
-        height: 1,
-        depth_or_array_size: 1,
-        mip_levels: 1,
-        format: 0,
-        sample_count: 1,
-        sample_quality: 0,
-        layout: 1,
-        flags: 0,
-    };
-    let mut out = std::ptr::null();
-    let hr = create_committed(
-        std::ptr::null(),
-        &heap,
-        0,
-        &desc,
-        0,
-        std::ptr::null(),
-        &RESOURCE_IIDS[0],
-        &mut out,
-    );
-    assert_eq!(hr, S_OK);
-    out
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use crate::object::slot;
-
-    #[test]
-    fn a8_unorm_is_not_in_the_r8_typeless_family() {
-        // DXGI_FORMAT values: 60 R8_TYPELESS, 61 R8_UNORM, 62 R8_UINT,
-        // 63 R8_SNORM, 64 R8_SINT, 65 A8_UNORM. The R8 typeless family is
-        // 60..=64; A8_UNORM has no typeless family and cannot be cast to R8,
-        // so it must stand alone rather than fold into R8_TYPELESS.
-        assert_eq!(family(60), 60);
-        for f in 61..=64 {
-            assert_eq!(family(f), 60);
-        }
-        assert_eq!(family(65), 65);
-        // Boundaries: 59 belongs to the preceding family, 66 is unmapped.
-        assert_eq!(family(59), 53);
-        assert_eq!(family(66), 66);
-    }
 
     type Release = extern "system" fn(This) -> u32;
     type Map = extern "system" fn(This, u32, *const c_void, *mut *mut u8) -> HRESULT;
@@ -3141,55 +3052,6 @@ mod tests {
         assert_eq!((r[0], s[0]), (16, 128));
         let (_, _, _, t) = footprints(&texture(64, 64, 71, 1), 1, 1);
         assert_eq!(t, u64::MAX, "no second subresource");
-    }
-
-    #[test]
-    fn depth_stencil_footprints_follow_the_pc_plane_order() {
-        // Native D3D12 reports the same layout for both depth/stencil families
-        // and their view formats. Mips vary fastest, then array slices, then planes.
-        let expected = [
-            (512, 39, 16, 8),
-            (4_608, 39, 8, 4),
-            (6_656, 39, 16, 8),
-            (10_752, 39, 8, 4),
-            (12_800, 60, 16, 8),
-            (16_896, 60, 8, 4),
-            (18_944, 60, 16, 8),
-            (23_040, 60, 8, 4),
-        ];
-        for format in (19..=22).chain(44..=47) {
-            let desc = ResourceDesc {
-                depth_or_array_size: 2,
-                ..texture(16, 8, format, 2)
-            };
-            let mut layouts = [NO_FOOTPRINT; 8];
-            let (mut rows, mut sizes, mut total) = ([0; 8], [0; 8], 0);
-            copyable_footprints(
-                std::ptr::null(),
-                &desc,
-                0,
-                8,
-                512,
-                layouts.as_mut_ptr(),
-                rows.as_mut_ptr(),
-                sizes.as_mut_ptr(),
-                &mut total,
-            );
-
-            assert_eq!(
-                layouts.map(|l| (l.offset, l.format, l.width, l.height)),
-                expected,
-                "format {format}"
-            );
-            assert!(
-                layouts.iter().all(|l| l.depth == 1 && l.row_pitch == 512),
-                "format {format}"
-            );
-            assert_eq!(rows, [8, 4, 8, 4, 8, 4, 8, 4], "format {format}");
-            assert_eq!(sizes, [64, 32, 64, 32, 16, 8, 16, 8], "format {format}");
-            assert_eq!(total, 24_072, "format {format}");
-            assert!(subresource(&desc, 8).is_none(), "format {format}");
-        }
     }
 
     /// A 4x4 texture filled from a title buffer through our list and queue,
