@@ -662,6 +662,10 @@ struct Guards {
     /// runtime last mapped or unmapped them. They are view memory whether
     /// their guard stands now or a write has opened it.
     viewed: BTreeSet<usize>,
+    /// With [`holes_by_frame`]: runs of uncommitted blocks as Windows
+    /// described them in frame `holes_frame`, first block to end.
+    holes: BTreeMap<usize, usize>,
+    holes_frame: u64,
 }
 
 /// Whether a block once guarded stays known as view memory while its
@@ -711,6 +715,8 @@ static GUARDS: Mutex<Guards> = Mutex::new(Guards {
     absent: BTreeSet::new(),
     aliased: BTreeSet::new(),
     viewed: BTreeSet::new(),
+    holes: BTreeMap::new(),
+    holes_frame: 0,
 });
 
 fn guards() -> std::sync::MutexGuard<'static, Guards> {
@@ -769,7 +775,7 @@ fn guard(start: usize, end: usize, known: bool) -> Option<Vec<usize>> {
             // Ordinary commits need no runtime mapping notification. Reuse
             // this asking's query for the following blocks in the same region.
             if block >= uncommitted_until {
-                uncommitted_until = uncommitted_end(block);
+                uncommitted_until = hole_end(&mut g, block);
             }
             open = block >= uncommitted_until;
             if open {
@@ -984,9 +990,15 @@ fn protect_here(g: &mut Guards, from: usize, to: usize) {
     }
     #[cfg(feature = "diagnostics")]
     crate::copystat::add(crate::copystat::C::GuardProtectFails, 1);
-    for block in from..to {
+    // Block by block; a block that is not committed answers for the whole
+    // uncommitted run it begins (one question, no protection asked for the
+    // rest: 77 runs a frame were refused whole in the world, with 10,264
+    // questions to Windows and 1,120 protections a frame, run int-i-1).
+    let mut block = from;
+    while block < to {
         if set(block, block + 1) {
             note(g, block, block + 1);
+<<<<<<< HEAD
         } else {
             #[cfg(feature = "diagnostics")]
             let error = std::io::Error::last_os_error();
@@ -1004,6 +1016,17 @@ fn protect_here(g: &mut Guards, from: usize, to: usize) {
                     }
                 }
             }
+=======
+            block += 1;
+            continue;
+        }
+        let end = uncommitted_end(block).min(to);
+        if end > block {
+            g.absent.extend(block..end);
+            block = end;
+        } else {
+            block += 1;
+>>>>>>> cc642f9 (GPU: the guards can keep what Windows said of uncommitted runs for a frame (VICTORY_GUARD_HOLES_FRAME, off by default))
         }
     }
 }
@@ -1024,6 +1047,45 @@ fn uncommitted_end(block: usize) -> usize {
     } else {
         block
     }
+}
+
+/// Whether what Windows said of a run of uncommitted blocks holds for the
+/// rest of the frame (`VICTORY_GUARD_HOLES_FRAME=1`; off by default: every
+/// asking questions Windows again).
+///
+/// The title's streamed buffers lie over placeholders with holes, and a
+/// submission's askings walk them: 10,264 questions a frame in the world,
+/// 7.5 ms of the submitting thread (run int-i-1), nearly all with the
+/// answer of the asking before.
+/// shortcut: a block the title commits by an ordinary commit (no word from
+/// the runtime) after the frame's first question about it is copied as
+/// zeros until the next frame begins.
+fn holes_by_frame() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_GUARD_HOLES_FRAME").is_some_and(|v| v == "1"))
+}
+
+/// [`uncommitted_end`] of an absent `block`, from this frame's answers
+/// with [`holes_by_frame`].
+fn hole_end(g: &mut Guards, block: usize) -> usize {
+    if !holes_by_frame() {
+        return uncommitted_end(block);
+    }
+    let frame = crate::queue::presented();
+    if g.holes_frame != frame {
+        g.holes.clear();
+        g.holes_frame = frame;
+    }
+    if let Some((_, &end)) = g.holes.range(..=block).next_back()
+        && block < end
+    {
+        return end;
+    }
+    let end = uncommitted_end(block);
+    if end > block {
+        g.holes.insert(block, end);
+    }
+    end
 }
 
 /// Gives write access back to the guarded blocks of `[start, end)` and
@@ -1286,6 +1348,7 @@ pub fn title_memory_remapped(at: usize, len: usize) {
     // second ([`crate::resource::note_unmapped`]).
     crate::resource::note_unmapped(at as u64, len as u64);
     let mut g = guards();
+    g.holes.clear();
     let range = at / BLOCK..at.saturating_add(len).div_ceil(BLOCK);
     let absent: Vec<usize> = g.absent.range(range.clone()).copied().collect();
     for block in absent {
