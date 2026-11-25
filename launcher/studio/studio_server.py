@@ -228,7 +228,9 @@ def game_status():
 
 
 class LocalServer(ThreadingHTTPServer):
-    allow_reuse_address = True
+    # Keep False on Windows: SO_REUSEADDR allows two studio_server.py processes
+    # to bind 127.0.0.1:17642 simultaneously so a stale instance steals /api/launch.
+    allow_reuse_address = False
     daemon_threads = True
 
 
@@ -703,7 +705,8 @@ def launch_game(cfg, developer):
                     f"VIce session {now_iso}",
                     f"Engine: {engine}",
                     f"Engine build: {datetime.fromtimestamp(engine.stat().st_mtime).isoformat(timespec='seconds')}",
-                    f"Console: {console} | FastGPU: {int(fast_gpu)} | DStorageNotify: {int(dstorage_notify)}",
+                    f"Console: {console} | FastGPU: {int(fast_gpu)} | DStorageNotify: {int(dstorage_notify)} | BVH: {int(bvh_builder)}",
+                    f"GPU opts: Relay={env.get('VICTORY_RELAY')} | LevelsOnDemand={env.get('VICTORY_LEVELS_ON_DEMAND')} | WindowKB={env.get('VICTORY_WINDOW_KB', '4096')} | CardBuf={env.get('VICTORY_CARD_BUFFERS_MB')}MB | CardWin={env.get('VICTORY_CARD_WINDOWS_MB')}MB | TexStageMs={env.get('VICTORY_TEXTURE_STAGE_MS')} | Catchup={env.get('VICTORY_TEXTURE_CATCHUP')}",
                     f"Direct3D debug: {env.get('VICTORY_D3D12_DEBUG', '0')} | Surface: {env.get('VICE_SURFACE_STATS', '0')} | WARP: {env.get('VICTORY_D3D12_WARP', '0')}",
                 ]
                 for h in header:
