@@ -3,6 +3,8 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
+import ctypes
+import ctypes.wintypes as wt
 import hashlib
 import hmac
 import json
@@ -60,6 +62,76 @@ LOG_CATEGORIES = (
     ("D3D12:", "Direct3D validation message"),
     ("is not supported", "Unsupported operation"),
 )
+
+# Win32 helpers for fast real-time game process & window detection (zero subprocess spam)
+_user32 = ctypes.windll.user32
+_kernel32 = ctypes.windll.kernel32
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+_WNDENUMPROC = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
+_WM_CLOSE = 0x0010
+
+
+def _pid_exe_name(pid):
+    h = _kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not h:
+        return ""
+    try:
+        buf = ctypes.create_unicode_buffer(512)
+        size = wt.DWORD(len(buf))
+        if _kernel32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size)):
+            return os.path.basename(buf.value).lower()
+    finally:
+        _kernel32.CloseHandle(h)
+    return ""
+
+
+def _find_game_windows():
+    """Return list of (hwnd, pid, title) for visible victory.exe game windows."""
+    found = []
+    with PROC_LOCK:
+        tracked_pid = PROC.pid if (PROC is not None and PROC.poll() is None) else None
+
+    def cb(hwnd, _):
+        if not _user32.IsWindowVisible(hwnd):
+            return True
+        pid = wt.DWORD(0)
+        _user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        p = pid.value
+        if not p:
+            return True
+        is_game_pid = (tracked_pid is not None and p == tracked_pid)
+        if not is_game_pid:
+            exe = _pid_exe_name(p)
+            if exe in ("victory.exe", "victory-diag.exe", "victory-debug.exe") or exe.startswith("vice-"):
+                is_game_pid = True
+        if is_game_pid:
+            length = _user32.GetWindowTextLengthW(hwnd)
+            if length > 0:
+                buf = ctypes.create_unicode_buffer(length + 1)
+                _user32.GetWindowTextW(hwnd, buf, length + 1)
+                found.append((hwnd, p, buf.value))
+            else:
+                found.append((hwnd, p, "VIce"))
+        return True
+
+    try:
+        _user32.EnumWindows(_WNDENUMPROC(cb), 0)
+    except OSError:
+        pass
+    return found
+
+
+def game_status():
+    """Return (running, window_open, window_title, pids)."""
+    with PROC_LOCK:
+        proc_alive = PROC is not None and PROC.poll() is None
+        tracked_pid = PROC.pid if proc_alive else None
+    wins = _find_game_windows()
+    pids = sorted({w[1] for w in wins} | ({tracked_pid} if tracked_pid else set()))
+    window_open = len(wins) > 0
+    window_title = wins[0][2] if wins else None
+    running = proc_alive or window_open
+    return running, window_open, window_title, pids
 
 
 class LocalServer(ThreadingHTTPServer):
@@ -148,21 +220,37 @@ def list_versions():
 
 
 def is_running():
-    with PROC_LOCK:
-        return PROC is not None and PROC.poll() is None
+    running, _, _, _ = game_status()
+    return running
 
 
 def stop_game():
-    with PROC_LOCK:
-        proc = PROC
-    if proc is not None and proc.poll() is None:
+    wins = _find_game_windows()
+    _, _, _, pids = game_status()
+    # Try graceful window close first so pipeline cache saves cleanly!
+    for hwnd, _, _ in wins:
+        try:
+            _user32.PostMessageW(hwnd, _WM_CLOSE, 0, 0)
+        except OSError:
+            pass
+    if wins:
+        deadline = time.monotonic() + 2.5
+        while time.monotonic() < deadline:
+            r, _, _, _ = game_status()
+            if not r:
+                return True
+            time.sleep(0.15)
+    # Fallback force kill for any remaining game PIDs
+    _, _, _, rem_pids = game_status()
+    killed = False
+    for pid in rem_pids:
         subprocess.run(
-            ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
             capture_output=True,
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
-        return True
-    return False
+        killed = True
+    return killed or bool(pids)
 
 
 def parse_line_metrics(line, target):
@@ -273,7 +361,9 @@ def read_disk_session(filename):
 
 
 def current_session_summary(include_lines=False):
-    if is_running():
+    with PROC_LOCK:
+        proc_owned = PROC is not None and PROC.poll() is None
+    if proc_owned:
         with LIVE_LOCK:
             data = {
                 "meta": file_meta(LOGDIR / "play.log"),
@@ -304,6 +394,7 @@ def build_state():
         dev = DEV
     title = resolve_title()
     versions = list_versions()
+    running, window_open, window_title, _ = game_status()
     cur = current_session_summary(include_lines=False)
     prev = dict(read_disk_session("play.previous.log"))
     prev.pop("lines", None)
@@ -338,7 +429,10 @@ def build_state():
     return {
         "server": SERVER_VERSION,
         "developer": dev,
-        "running": is_running(),
+        "running": running,
+        "windowOpen": window_open,
+        "windowTitle": window_title,
+        "hasEmblem": (BASE / "studio-emblem.png").is_file(),
         "title": str(title) if (title and dev) else bool(title),
         "titleName": title.name if title else None,
         "versions": versions,
@@ -349,6 +443,10 @@ def build_state():
 
 def launch_game(cfg, developer):
     global PROC
+    running, _, _, _ = game_status()
+    if running:
+        raise RuntimeError("Le jeu est déjà ouvert.")
+
     version = cfg.get("version", "victory.exe")
     if not developer:
         version = "victory.exe"
@@ -563,6 +661,11 @@ class Handler(BaseHTTPRequestHandler):
             if asset.is_file():
                 self.send_bytes(200, "image/svg+xml", asset.read_bytes())
                 return
+        if req.path == "/art/studio-emblem.png":
+            asset = BASE / "studio-emblem.png"
+            if asset.is_file():
+                self.send_bytes(200, "image/png", asset.read_bytes())
+                return
         if req.path == "/api/state":
             if not self.check_token():
                 return
@@ -674,8 +777,8 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     if "--self-test" in sys.argv:
         st = build_state()
-        assert "versions" in st and "current" in st and "developer" in st
-        print("Self-test OK:", len(st["versions"]), "builds, dev=", st["developer"])
+        assert "versions" in st and "windowOpen" in st and "developer" in st
+        print("Self-test OK:", len(st["versions"]), "builds, windowOpen=", st["windowOpen"])
         sys.exit(0)
 
     port = 0 if "--no-browser" in sys.argv else 17642
@@ -694,9 +797,9 @@ if __name__ == "__main__":
         except OSError:
             pass
         if not existing:
-            import ctypes
+            import ctypes as _ct
 
-            ctypes.windll.user32.MessageBoxW(
+            _ct.windll.user32.MessageBoxW(
                 0,
                 "Le port local 17642 de VIce Studio est occupé. Fermez l'autre application puis réessayez.",
                 "VIce Studio",
