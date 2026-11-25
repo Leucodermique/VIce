@@ -579,13 +579,13 @@ def launch_game(cfg, developer):
         env.pop("VICTORY_AUTO_QUARTER", None)
         env.pop("VICTORY_DISK_CORES", None)
         env.pop("VICTORY_CARD_BUFFERS_MIN_KB", None)
+        env.pop("VICTORY_SHADER_OPT", None)
         if console == "series-x":
             env["VICTORY_RESOLUTION"] = "1920x1080"
             env["VICTORY_DISPLAY_MODE"] = "1920x1080"
         else:
             env.pop("VICTORY_RESOLUTION", None)
             env.pop("VICTORY_DISPLAY_MODE", None)
-        env["VICTORY_SHADER_OPT"] = "0"
         env["VICTORY_BVH_HOLD"] = "0" if bvh_builder else "1"
         env["VICTORY_AMBIENT"] = "off" if bvh_builder else "0.55"
         env["VICTORY_TEXTURE_DROP_MIPS"] = "1"
