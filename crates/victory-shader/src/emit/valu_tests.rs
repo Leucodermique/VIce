@@ -1964,6 +1964,7 @@ fn build_sampled_cs(body: &[u32], vgprs: u16) -> HostShader {
         outputs: Vec::new(),
         prims: Vec::new(),
         mesh_stride: 0,
+        gs: None,
     })
     .unwrap();
     let mut dxil = l.dxil;

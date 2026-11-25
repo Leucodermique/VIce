@@ -71,12 +71,13 @@ def launch_game(cfg):
     cmd=[str(engine),"run",str(title),"--execute","--console",cfg["console"]]
     env=os.environ.copy()
     env["NO_COLOR"]="1"
-    # Optimisations max RTX 4070 8 Go / 16 Go RAM (PR #191 + #206 corrigent peau/murs sous RELAY=2, + COPY queue 5e758c7 + AVX2 #384).
+    # Optimisations max RTX 4070 8 Go / 16 Go RAM (c96b4f2 + #191/#206 + COPY queue 5e758c7 + AVX2 #384 + dstorage notify lot9).
     env["VICTORY_RELAY"]="2"
     env["VICTORY_WIDE_BACK"]="1"
     env["VICTORY_LATE_WAIT_LISTS"]="512"
-    env["VICTORY_CARD_BUFFERS_MIN_MB"]="16"
-    env["VICTORY_CARD_BUFFERS_MB"]="512"
+    env["VICTORY_CARD_BUFFERS_MIN_MB"]="1"
+    env["VICTORY_CARD_BUFFERS_MB"]="768"
+    env["VICTORY_DSTORAGE_NOTIFY"]="1"
     for k,flag in (("VICTORY_D3D12_WARP",cfg["warp"]),("VICTORY_D3D12_DEBUG",cfg["debug"]),("VICE_SURFACE_STATS",cfg["surface"])):
         env.pop(k,None)
         if flag: env[k]="1"
