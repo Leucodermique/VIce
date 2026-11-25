@@ -127,6 +127,18 @@ pub(crate) enum C {
     WaitsForGroups,
     WaitsForBuffers,
     IndirectBounded,
+    /// The guards of view memory (`crate::watch`): askings; of them the
+    /// ones whose range was known as a view with no question to Windows,
+    /// and the ones found all clean; blocks walked by the others;
+    /// questions to Windows about memory; protections asked of Windows,
+    /// and the runs of blocks it refused whole.
+    GuardAsks,
+    GuardKnown,
+    GuardClean,
+    GuardBlocks,
+    GuardQueries,
+    GuardProtects,
+    GuardProtectFails,
     /// `watch::writes` kernel askings that failed (the range is not
     /// write-watched: view memory or not watchable).
     WatchFailed,
@@ -1296,6 +1308,18 @@ pub(crate) fn log(frames: f64) {
         c[C::WaitsForBuffers as usize],
         c[C::IndirectBounded as usize],
         barrier_test()
+    );
+    tracing::info!(
+        "  guards of view memory per frame: {:.0} askings, {:.0} of them of ranges known as views with no \
+         question to Windows, {:.0} found all clean; the others walked {:.0} blocks; {:.0} questions to \
+         Windows about memory; {:.0} protections asked, {:.0} runs of blocks refused whole",
+        c[C::GuardAsks as usize],
+        c[C::GuardKnown as usize],
+        c[C::GuardClean as usize],
+        c[C::GuardBlocks as usize],
+        c[C::GuardQueries as usize],
+        c[C::GuardProtects as usize],
+        c[C::GuardProtectFails as usize],
     );
     // What is compared after submissions, largest first, and how much of
     // it shaders had written.
