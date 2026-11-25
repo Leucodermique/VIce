@@ -11598,6 +11598,7 @@ mod tests {
                 outputs: vec![],
                 prims: vec![],
                 mesh_stride: 0,
+                gs: None,
             })
             .unwrap()
         };
