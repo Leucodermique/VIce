@@ -313,15 +313,15 @@ def file_meta(path, alias=None):
 
 
 def list_versions():
-    release_exe = ENGINE / "target" / "release" / "victory.exe"
     diag_exe = ENGINE / "target" / "diag" / "victory.exe"
+    release_exe = ENGINE / "target" / "release" / "victory.exe"
     debug_exe = ENGINE / "target" / "debug" / "victory.exe"
-    primary = release_exe if release_exe.is_file() else (diag_exe if diag_exe.is_file() else debug_exe)
+    primary = diag_exe if diag_exe.is_file() else (release_exe if release_exe.is_file() else debug_exe)
     items = []
     if primary.is_file():
         items.append(file_meta(primary, alias="victory.exe"))
-    if release_exe.is_file() and diag_exe.is_file():
-        items.append(file_meta(diag_exe, alias="victory-diag.exe"))
+    if release_exe.is_file() and primary != release_exe:
+        items.append(file_meta(release_exe, alias="victory-release.exe"))
     if debug_exe.is_file() and primary != debug_exe:
         items.append(file_meta(debug_exe, alias="victory-debug.exe"))
     vdir = ENGINE / "launcher" / "versions"
