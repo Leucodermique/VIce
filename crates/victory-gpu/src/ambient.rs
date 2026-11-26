@@ -263,7 +263,11 @@ void clear_air(uint3 at : SV_DispatchThreadID) {
     uint at0 = (q.y * PX + q.x) * 3;
     float3 seen_there = float3(points[at0].w, points[at0 + 1].w, points[at0 + 2].w);
     float far = float(at.z) / float(d);
-    float cap = min(air * lerp(dot(cells[CELLS].rgb, LUMA), dot(seen_there, LUMA), far), 2.2);
+    // Volumetric inscattering is integrated across all depth slices: without RT,
+    // sunset sky leaks into indoor froxels and turns the whole room into an opaque
+    // peach/white wall for 5-6 seconds. Cap strictly per slice (tighter near camera).
+    float slice_max = lerp(0.020, 0.045, smoothstep(0.15, 0.70, far));
+    float cap = min(air * lerp(dot(cells[CELLS].rgb, LUMA), dot(seen_there, LUMA), far), slice_max);
     float3 c = scattered[at];
     // LOCAL: a NaN or infinity in the air is summed along every view ray
     // through it: black or white patches floating in the room.

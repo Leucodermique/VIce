@@ -214,13 +214,13 @@ void clear_hits() {
 #endif
 
 #ifdef DETECT_HITS
-// Runs on a 4px grid (w/4 x h/4): detects Xbox button prompts both inside dark HUD
+// Runs on a 2px grid (w/2 x h/2): detects Xbox button prompts both inside dark HUD
 // pop-up boxes (top-left) and floating interaction prompts (bottom-right & bottom-center).
 [RootSignature(RS)]
 [numthreads(8, 8, 1)]
 void detect_hits(uint3 tid : SV_DispatchThreadID) {
     float scale = float(h) / 1080.0;
-    float2 p = float2(tid.xy * 4u + 2u);
+    float2 p = float2(tid.xy * 2u + 1u);
     if (p.x < 26.0 * scale || p.x >= float(w) - 26.0 * scale ||
         p.y < 26.0 * scale || p.y >= float(h) - 26.0 * scale) {
         return;
@@ -488,12 +488,39 @@ void detect_hits(uint3 tid : SV_DispatchThreadID) {
 [RootSignature(RS)]
 [numthreads(1, 1, 1)]
 void merge_hits() {
-    uint raw_n = min(prompts.Load(0), 64u);
-    if (raw_n == 0u) {
+    float scale = float(h) / 1080.0;
+
+    // Clear persistent history immediately on opaque full-screen UI (loading screens / menus).
+    uint opaque_probes = 0u;
+    if (ui.SampleLevel(linear_clamp, float2(0.50, 0.30), 0).a > 0.40) opaque_probes++;
+    if (ui.SampleLevel(linear_clamp, float2(0.50, 0.50), 0).a > 0.40) opaque_probes++;
+    if (ui.SampleLevel(linear_clamp, float2(0.35, 0.45), 0).a > 0.40) opaque_probes++;
+    if (ui.SampleLevel(linear_clamp, float2(0.65, 0.45), 0).a > 0.40) opaque_probes++;
+    if (ui.SampleLevel(linear_clamp, float2(0.50, 0.65), 0).a > 0.40) opaque_probes++;
+    if (opaque_probes >= 3u) {
         prompts.Store(260 * 4, 0u);
+        prompts.Store(320 * 4, 0u);
         return;
     }
-    float scale = float(h) / 1080.0;
+
+    // Load previous frame's persistent hits (dwords 320..385) for anti-flicker hysteresis.
+    uint prev_n = min(prompts.Load(320 * 4), 8u);
+    uint4 prev_box[8];
+    uint4 prev_meta[8]; // (icon, style, ttl, 0)
+    bool prev_matched[8];
+    for (uint p = 0u; p < 8u; p++) {
+        prev_matched[p] = false;
+        if (p < prev_n) {
+            uint psrc = (321u + p * 8u) * 4u;
+            prev_box[p] = prompts.Load4(psrc);
+            prev_meta[p] = prompts.Load4(psrc + 16u);
+        } else {
+            prev_box[p] = uint4(0, 0, 0, 0);
+            prev_meta[p] = uint4(0, 0, 0, 0);
+        }
+    }
+
+    uint raw_n = min(prompts.Load(0), 64u);
     float merge_r = 22.0 * scale;
 
     bool used[64];
@@ -501,40 +528,87 @@ void merge_hits() {
     for (uint k = 0u; k < 64u; k++) used[k] = false;
 
     uint out_n = 0u;
+    uint4 out_box[8];
+    uint4 out_meta[8];
+
     for (uint i = 0u; i < raw_n && out_n < 8u; i++) {
         if (used[i]) continue;
         uint4 a = prompts.Load4((1u + i * 4u) * 4u);
         float sw = float(a.w);
         float sx = float(a.x) * sw;
         float sy = float(a.y) * sw;
+        uint best_w = a.w;
+        uint best_z = a.z;
         used[i] = true;
         for (uint j = i + 1u; j < raw_n; j++) {
             if (used[j]) continue;
             uint4 b = prompts.Load4((1u + j * 4u) * 4u);
-            if (b.z != a.z) continue;
             float2 d = float2(float(b.x) - float(a.x), float(b.y) - float(a.y));
             if (dot(d, d) <= merge_r * merge_r) {
                 float bw = float(b.w);
                 sx += float(b.x) * bw;
                 sy += float(b.y) * bw;
                 sw += bw;
+                if (b.w > best_w) {
+                    best_w = b.w;
+                    best_z = b.z;
+                }
                 used[j] = true;
             }
         }
         float cx = sx / max(sw, 1.0);
         float cy = sy / max(sw, 1.0);
-        uint icon = a.z & 0xFFu;
-        uint style = (a.z >> 8) & 0xFFu;
-        // style 0: popup box icon (15px), style 1/3: floating circle (15px), style 2: inside hold ring (14.5px to fully cover LT)
+        uint icon = best_z & 0xFFu;
+        uint style = (best_z >> 8) & 0xFFu;
+
+        // Match against previous frame's hits within 18px to stabilize position & prevent icon flips.
+        float match_r = 18.0 * scale;
+        for (uint p = 0u; p < prev_n; p++) {
+            if (prev_matched[p]) continue;
+            float2 pd = float2(cx - float(prev_box[p].x), cy - float(prev_box[p].y));
+            if (dot(pd, pd) <= match_r * match_r) {
+                prev_matched[p] = true;
+                cx = lerp(float(prev_box[p].x), cx, 0.55);
+                cy = lerp(float(prev_box[p].y), cy, 0.55);
+                break;
+            }
+        }
+
         float rad = (style == 2u) ? 14.5 : 15.0;
         uint hw = uint(rad * scale + 0.5);
         uint hh = uint(rad * scale + 0.5);
-        uint dst = (261u + out_n * 6u) * 4u;
-        prompts.Store4(dst, uint4(uint(cx + 0.5), uint(cy + 0.5), hw, hh));
-        prompts.Store2(dst + 16u, uint2(icon, style));
+        out_box[out_n] = uint4(uint(cx + 0.5), uint(cy + 0.5), hw, hh);
+        out_meta[out_n] = uint4(icon, style, 10u, 0u);
         out_n++;
     }
+
+    // Carry over unmatched previous hits for up to 10 frames as long as UI pixels
+    // are still visible at that exact prompt location (eliminates Xbox <-> PC flicker!).
+    for (uint p = 0u; p < prev_n && out_n < 8u; p++) {
+        if (prev_matched[p] || prev_meta[p].z <= 1u) continue;
+        float2 pc = float2(prev_box[p].xy);
+        uint pstyle = prev_meta[p].y;
+        float a_center = sample_ui_px(pc).a;
+        float a_ring = sample_ui_px(pc + float2((pstyle == 2u ? 18.0 : 9.0) * scale, 0.0)).a;
+        if (max(a_center, a_ring) > 0.30) {
+            out_box[out_n] = prev_box[p];
+            out_meta[out_n] = uint4(prev_meta[p].x, pstyle, prev_meta[p].z - 1u, 0u);
+            out_n++;
+        }
+    }
+
+    // Store active hits for COMPOSE (260..) and persistent state for next frame (320..).
     prompts.Store(260 * 4, out_n);
+    prompts.Store(320 * 4, out_n);
+    for (uint k = 0u; k < out_n; k++) {
+        uint dst = (261u + k * 6u) * 4u;
+        prompts.Store4(dst, out_box[k]);
+        prompts.Store2(dst + 16u, out_meta[k].xy);
+
+        uint pdst = (321u + k * 8u) * 4u;
+        prompts.Store4(pdst, out_box[k]);
+        prompts.Store4(pdst + 16u, out_meta[k]);
+    }
 }
 #endif
 
@@ -1072,7 +1146,7 @@ pub(crate) fn record(
             list.ResourceBarrier(&uav_barrier);
 
             list.SetPipelineState(&pass.pso_detect);
-            list.Dispatch((w as u32).div_ceil(32), h.div_ceil(32), 1);
+            list.Dispatch((w as u32).div_ceil(16), h.div_ceil(16), 1);
             list.ResourceBarrier(&uav_barrier);
 
             list.SetPipelineState(&pass.pso_merge);
