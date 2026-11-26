@@ -61,7 +61,7 @@ const DEVICES: usize = PADS + 2;
 const HISTORY: usize = 256;
 const POLL: Duration = Duration::from_millis(8);
 
-/// The keyboard's stand-in gamepad (virtual key, button); README lists it.
+/// The keyboard's stand-in gamepad (virtual key, button); classic layout.
 /// Sticks: W/A/S/D left, I/J/K/L right; triggers Z and C.
 const FALLBACK_BUTTONS: [(u8, u32); 14] = [
     (0x1B, MENU), // Esc
@@ -79,6 +79,77 @@ const FALLBACK_BUTTONS: [(u8, u32); 14] = [
     (b'F', LEFT_STICK),
     (b'H', RIGHT_STICK),
 ];
+
+/// GTA-style PC keyboard buttons for AZERTY (Z/Q/S/D movement) and QWERTY
+/// (W/A/S/D movement), paired with mouse look and mouse clicks (LMB=RT, RMB=LT, MMB=R3).
+const PC_AZERTY_BUTTONS: [(u8, u32); 20] = [
+    (0x1B, MENU),           // Esc -> Pause
+    (b'P', MENU),           // P -> Pause
+    (b'V', VIEW),           // V -> Camera view
+    (0xA0, A),              // Left Shift -> Sprint / Confirm
+    (0x0D, A),              // Enter -> Confirm
+    (0x20, X),              // Space -> Jump / Climb
+    (b'R', B),              // R -> Reload / Melee / Back
+    (0x08, B),              // Backspace -> Back
+    (b'F', Y),              // F -> Enter / Exit vehicle
+    (0x09, LEFT_SHOULDER),  // Tab -> Weapon wheel
+    (b'A', LEFT_SHOULDER),  // A (left of Z on AZERTY) -> Weapon wheel / LB
+    (b'G', RIGHT_SHOULDER), // G -> Cover / RB
+    (b'X', RIGHT_SHOULDER), // X -> Cover / RB
+    (0xA2, LEFT_STICK),     // Left Ctrl -> Crouch / Stealth (L3)
+    (b'C', RIGHT_STICK),    // C -> Look behind / Zoom (R3)
+    (b'E', RIGHT),          // E -> Interact (D-Pad Right)
+    (0x26, UP),             // Up arrow -> Phone / D-Pad Up
+    (0x28, DOWN),           // Down arrow -> D-Pad Down
+    (0x25, LEFT),           // Left arrow -> D-Pad Left
+    (0x27, RIGHT),          // Right arrow -> D-Pad Right
+];
+
+const PC_QWERTY_BUTTONS: [(u8, u32); 20] = [
+    (0x1B, MENU),
+    (b'P', MENU),
+    (b'V', VIEW),
+    (0xA0, A),
+    (0x0D, A),
+    (0x20, X),
+    (b'R', B),
+    (0x08, B),
+    (b'F', Y),
+    (0x09, LEFT_SHOULDER),
+    (b'Q', LEFT_SHOULDER),
+    (b'G', RIGHT_SHOULDER),
+    (b'X', RIGHT_SHOULDER),
+    (0xA2, LEFT_STICK),
+    (b'C', RIGHT_STICK),
+    (b'E', RIGHT),
+    (0x26, UP),
+    (0x28, DOWN),
+    (0x25, LEFT),
+    (0x27, RIGHT),
+];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KeyboardLayout {
+    Classic,
+    Azerty,
+    Qwerty,
+}
+
+fn keyboard_layout() -> KeyboardLayout {
+    static LAYOUT: LazyLock<KeyboardLayout> = LazyLock::new(|| {
+        match std::env::var("VICTORY_KB_LAYOUT")
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "azerty" | "fr" | "pc-azerty" => KeyboardLayout::Azerty,
+            "qwerty" | "en" | "pc-qwerty" | "pc" => KeyboardLayout::Qwerty,
+            _ => KeyboardLayout::Classic,
+        }
+    });
+    *LAYOUT
+}
 
 /// A gamepad reading: triggers 0 to 1, sticks -1 to 1 (up positive).
 #[repr(C)]
@@ -111,11 +182,15 @@ trait Source: Send {
     fn pad(&mut self, slot: usize) -> Option<PadState>;
     /// Keys held down; none while the title's window lacks focus.
     fn keys(&mut self) -> Vec<KeyState>;
+    /// Mouse-driven gamepad input (right stick camera + LMB/RMB triggers + MMB R3).
+    fn mouse_pad(&mut self) -> PadState {
+        PadState::default()
+    }
     /// Motor speeds: low frequency (left), high frequency (right).
     fn rumble(&mut self, slot: usize, low: u16, high: u16);
 }
 
-fn fallback(keys: &[KeyState]) -> PadState {
+fn fallback_for(layout: KeyboardLayout, keys: &[KeyState]) -> PadState {
     let on = |vk: u8| {
         if keys.iter().any(|k| k.virtual_key == vk) {
             1.0
@@ -123,18 +198,48 @@ fn fallback(keys: &[KeyState]) -> PadState {
             0.0
         }
     };
-    PadState {
-        buttons: FALLBACK_BUTTONS
-            .iter()
-            .filter(|(vk, _)| on(*vk) != 0.0)
-            .fold(0, |all, (_, bit)| all | bit),
-        left_trigger: on(b'Z'),
-        right_trigger: on(b'C'),
-        left_x: on(b'D') - on(b'A'),
-        left_y: on(b'W') - on(b'S'),
-        right_x: on(b'L') - on(b'J'),
-        right_y: on(b'I') - on(b'K'),
+    match layout {
+        KeyboardLayout::Classic => PadState {
+            buttons: FALLBACK_BUTTONS
+                .iter()
+                .filter(|(vk, _)| on(*vk) != 0.0)
+                .fold(0, |all, (_, bit)| all | bit),
+            left_trigger: on(b'Z'),
+            right_trigger: on(b'C'),
+            left_x: on(b'D') - on(b'A'),
+            left_y: on(b'W') - on(b'S'),
+            right_x: on(b'L') - on(b'J'),
+            right_y: on(b'I') - on(b'K'),
+        },
+        KeyboardLayout::Azerty => PadState {
+            buttons: PC_AZERTY_BUTTONS
+                .iter()
+                .filter(|(vk, _)| on(*vk) != 0.0)
+                .fold(0, |all, (_, bit)| all | bit),
+            left_trigger: 0.0,
+            right_trigger: 0.0,
+            left_x: on(b'D') - on(b'Q'),
+            left_y: on(b'Z') - on(b'S'),
+            right_x: on(b'L') - on(b'J'),
+            right_y: on(b'I') - on(b'K'),
+        },
+        KeyboardLayout::Qwerty => PadState {
+            buttons: PC_QWERTY_BUTTONS
+                .iter()
+                .filter(|(vk, _)| on(*vk) != 0.0)
+                .fold(0, |all, (_, bit)| all | bit),
+            left_trigger: 0.0,
+            right_trigger: 0.0,
+            left_x: on(b'D') - on(b'A'),
+            left_y: on(b'W') - on(b'S'),
+            right_x: on(b'L') - on(b'J'),
+            right_y: on(b'I') - on(b'K'),
+        },
     }
+}
+
+fn fallback(keys: &[KeyState]) -> PadState {
+    fallback_for(keyboard_layout(), keys)
 }
 
 /// Two pads as one: buttons of both, and of each axis and trigger the one
@@ -430,12 +535,12 @@ impl Hub {
 
     /// Reads the host once; device callbacks run on the calling thread.
     fn poll(&self) {
-        let (pads, keys) = {
+        let (pads, keys, mouse) = {
             let mut source = lock(&self.source);
             let pads: [_; PADS] = std::array::from_fn(|slot| source.pad(slot));
-            (pads, source.keys())
+            (pads, source.keys(), source.mouse_pad())
         };
-        let events = self.state().poll(&self.devices, self.one_pad, pads, keys);
+        let events = self.state().poll(&self.devices, self.one_pad, pads, keys, mouse);
         self.deliver(events);
     }
 
@@ -481,11 +586,13 @@ impl State {
         one_pad: bool,
         pads: [Option<PadState>; PADS],
         keys: Vec<KeyState>,
+        mouse: PadState,
     ) -> Vec<Event> {
         let now = now();
         let mut events = std::mem::take(&mut self.pending);
+        let kb_mouse = merged(fallback(&keys), mouse);
         if one_pad {
-            let pad = pads.into_iter().flatten().fold(fallback(&keys), merged);
+            let pad = pads.into_iter().flatten().fold(kb_mouse, merged);
             self.update(devices, FALLBACK, Some(Value::Pad(pad)), now, &mut events);
             self.update(devices, KEYBOARD, Some(Value::Keys(keys)), now, &mut events);
             return events;
@@ -494,8 +601,8 @@ impl State {
         for (slot, pad) in pads.into_iter().enumerate() {
             self.update(devices, slot, pad.map(Value::Pad), now, &mut events);
         }
-        let fallback = (!any_pad).then(|| Value::Pad(fallback(&keys)));
-        self.update(devices, FALLBACK, fallback, now, &mut events);
+        let fallback_pad = (!any_pad).then(|| Value::Pad(kb_mouse));
+        self.update(devices, FALLBACK, fallback_pad, now, &mut events);
         self.update(devices, KEYBOARD, Some(Value::Keys(keys)), now, &mut events);
         events
     }
@@ -1119,9 +1226,11 @@ pub(crate) fn module() -> HleModule {
 mod host {
     use std::time::{Duration, Instant};
 
+    use windows_sys::Win32::Foundation::{HWND, POINT, RECT};
     use windows_sys::Win32::System::Threading::GetCurrentProcessId;
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-        GetAsyncKeyState, MAPVK_VK_TO_VSC_EX, MapVirtualKeyW,
+        GetAsyncKeyState, MAPVK_VK_TO_VSC_EX, MapVirtualKeyW, VK_F8, VK_LBUTTON, VK_MBUTTON,
+        VK_RBUTTON,
     };
     use windows_sys::Win32::UI::Input::XboxController::{
         XINPUT_GAMEPAD, XINPUT_GAMEPAD_A, XINPUT_GAMEPAD_B, XINPUT_GAMEPAD_BACK,
@@ -1132,7 +1241,7 @@ mod host {
         XInputSetState,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetWindowThreadProcessId,
+        GetCursorPos, GetForegroundWindow, GetWindowRect, GetWindowThreadProcessId, SetCursorPos,
     };
 
     use super::*;
@@ -1174,9 +1283,51 @@ mod host {
         }
     }
 
-    #[derive(Default)]
     pub(super) struct Host {
         empty_until: [Option<Instant>; PADS],
+        mouse_captured: bool,
+        mouse_primed: bool,
+        f8_was_down: bool,
+        smooth_x: f32,
+        smooth_y: f32,
+    }
+
+    impl Default for Host {
+        fn default() -> Self {
+            let enabled = std::env::var_os("VICTORY_MOUSE_LOOK").is_none_or(|v| v != "0");
+            Self {
+                empty_until: [None; PADS],
+                mouse_captured: enabled,
+                mouse_primed: false,
+                f8_was_down: false,
+                smooth_x: 0.0,
+                smooth_y: 0.0,
+            }
+        }
+    }
+
+    fn mouse_sensitivity() -> f32 {
+        static SENS: LazyLock<f32> = LazyLock::new(|| {
+            std::env::var("VICTORY_MOUSE_SENS")
+                .ok()
+                .and_then(|v| v.trim().parse::<f32>().ok())
+                .filter(|v| *v > 0.001 && *v <= 1.0)
+                .unwrap_or(0.028)
+        });
+        *SENS
+    }
+
+    fn focused_window() -> Option<HWND> {
+        let mut process = 0;
+        // SAFETY: plain queries; a null window gives process 0.
+        unsafe {
+            let hwnd = GetForegroundWindow();
+            if hwnd.is_null() {
+                return None;
+            }
+            GetWindowThreadProcessId(hwnd, &mut process);
+            (process == GetCurrentProcessId()).then_some(hwnd)
+        }
     }
 
     impl Source for Host {
@@ -1233,6 +1384,102 @@ mod host {
                     ..Default::default()
                 })
                 .collect()
+        }
+
+        fn mouse_pad(&mut self) -> PadState {
+            let Some(hwnd) = focused_window() else {
+                self.mouse_primed = false;
+                self.smooth_x = 0.0;
+                self.smooth_y = 0.0;
+                return PadState::default();
+            };
+            // Toggle mouse-look capture anytime with F8 (Esc releases until next click inside).
+            // SAFETY: plain key state query.
+            let f8_down = unsafe { GetAsyncKeyState(i32::from(VK_F8)) } < 0;
+            if f8_down && !self.f8_was_down {
+                self.mouse_captured = !self.mouse_captured;
+                self.mouse_primed = false;
+                tracing::info!(captured = self.mouse_captured, "mouse look toggled (F8)");
+            }
+            self.f8_was_down = f8_down;
+
+            let mut rect = RECT::default();
+            let mut pt = POINT::default();
+            // SAFETY: valid structs and foreground HWND of our process.
+            let (ok_rect, ok_pt) = unsafe {
+                (GetWindowRect(hwnd, &mut rect) != 0, GetCursorPos(&mut pt) != 0)
+            };
+            if !ok_rect || !ok_pt {
+                return PadState::default();
+            }
+            let width = rect.right - rect.left;
+            let height = rect.bottom - rect.top;
+            if width < 64 || height < 64 {
+                return PadState::default();
+            }
+            // Leave the top 34 px title bar free so clicking Close/Minimize never fires triggers.
+            let inside_body = pt.x >= rect.left + 4
+                && pt.x <= rect.right - 4
+                && pt.y >= rect.top + 34
+                && pt.y <= rect.bottom - 4;
+
+            // SAFETY: plain key state queries for mouse buttons.
+            let lmb = unsafe { GetAsyncKeyState(i32::from(VK_LBUTTON)) } < 0;
+            let rmb = unsafe { GetAsyncKeyState(i32::from(VK_RBUTTON)) } < 0;
+            let mmb = unsafe { GetAsyncKeyState(i32::from(VK_MBUTTON)) } < 0;
+
+            let mut pad = PadState::default();
+            if inside_body || self.mouse_captured {
+                if lmb {
+                    pad.right_trigger = 1.0;
+                }
+                if rmb {
+                    pad.left_trigger = 1.0;
+                }
+                if mmb {
+                    pad.buttons |= RIGHT_STICK;
+                }
+            }
+
+            if !self.mouse_captured {
+                self.smooth_x = 0.0;
+                self.smooth_y = 0.0;
+                return pad;
+            }
+
+            let cx = rect.left + width / 2;
+            let cy = rect.top + height / 2;
+            if !self.mouse_primed {
+                if inside_body {
+                    // SAFETY: recenter inside our focused game window.
+                    unsafe { SetCursorPos(cx, cy) };
+                    self.mouse_primed = true;
+                }
+                self.smooth_x = 0.0;
+                self.smooth_y = 0.0;
+                return pad;
+            }
+
+            let dx = (pt.x - cx) as f32;
+            let dy = (pt.y - cy) as f32;
+            if dx != 0.0 || dy != 0.0 {
+                // SAFETY: recenter inside our focused game window for continuous 360 camera.
+                unsafe { SetCursorPos(cx, cy) };
+            }
+            let sens = mouse_sensitivity();
+            let raw_x = (dx * sens).clamp(-1.0, 1.0);
+            let raw_y = (-dy * sens).clamp(-1.0, 1.0);
+            self.smooth_x = (self.smooth_x * 0.4 + raw_x * 0.6).clamp(-1.0, 1.0);
+            self.smooth_y = (self.smooth_y * 0.4 + raw_y * 0.6).clamp(-1.0, 1.0);
+            if self.smooth_x.abs() < 0.005 {
+                self.smooth_x = 0.0;
+            }
+            if self.smooth_y.abs() < 0.005 {
+                self.smooth_y = 0.0;
+            }
+            pad.right_x = self.smooth_x;
+            pad.right_y = self.smooth_y;
+            pad
         }
 
         fn rumble(&mut self, slot: usize, low: u16, high: u16) {
@@ -1683,6 +1930,27 @@ mod tests {
         assert_eq!(FROM_INSIDE.load(Ordering::SeqCst), 1);
         poller.join().unwrap();
         leave.join().unwrap();
+    }
+
+    #[test]
+    fn azerty_pc_layout_maps_zqsd_and_gta_keys() {
+        let keys = vec![
+            key(b'Z'),
+            key(b'D'),
+            key(0xA0), // Left Shift -> A (sprint)
+            key(0x20), // Space -> X (jump)
+            key(b'F'), // F -> Y (vehicle)
+            key(b'R'), // R -> B (reload)
+            key(b'E'), // E -> D-Pad Right (interact)
+            key(0xA2), // Left Ctrl -> L3 (crouch)
+            key(b'V'), // V -> View (camera)
+        ];
+        let pad = fallback_for(KeyboardLayout::Azerty, &keys);
+        assert_eq!(pad.left_x, 1.0);
+        assert_eq!(pad.left_y, 1.0);
+        assert_eq!(pad.buttons, A | X | Y | B | RIGHT | LEFT_STICK | VIEW);
+        let back_left = fallback_for(KeyboardLayout::Azerty, &[key(b'S'), key(b'Q')]);
+        assert_eq!((back_left.left_x, back_left.left_y), (-1.0, -1.0));
     }
 
     #[test]

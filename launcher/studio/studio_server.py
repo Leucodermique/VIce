@@ -673,6 +673,8 @@ def launch_game(cfg, developer):
     else:
         env["VICTORY_SKIP_PIPELINES"] = "none"
     env["VICTORY_BVH_BUILDER"] = "1" if bvh_builder else "0"
+    env["VICTORY_KB_LAYOUT"] = "azerty"
+    env["VICTORY_MOUSE_LOOK"] = "1"
 
     for env_key, opt_key in (
         ("VICTORY_D3D12_WARP", "warp"),
