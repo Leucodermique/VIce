@@ -537,38 +537,41 @@ class ViceOverlayApp:
         return self.telemetry.snapshot()["game_rect"]
 
     def _tick_hotkeys(self):
-        f9 = (_user32.GetAsyncKeyState(VK_F9) & 0x8000) != 0
-        f10 = (_user32.GetAsyncKeyState(VK_F10) & 0x8000) != 0
-        f11 = (_user32.GetAsyncKeyState(VK_F11) & 0x8000) != 0
+        try:
+            f9 = (_user32.GetAsyncKeyState(VK_F9) & 0x8000) != 0
+            f10 = (_user32.GetAsyncKeyState(VK_F10) & 0x8000) != 0
+            f11 = (_user32.GetAsyncKeyState(VK_F11) & 0x8000) != 0
 
-        if f9 and not self._last_f9:
-            started = self.recorder.toggle(self._get_capture_rect)
-            if started:
-                self.toast_text = "REC démarré (H.264)"
-                self.toast_until = time.monotonic() + 2.0
-            else:
-                saved = self.recorder.last_saved
-                if saved:
-                    self.toast_text = f"Sauvé : {saved.name}"
-                    self.toast_until = time.monotonic() + 5.0
-                elif self.recorder.last_error:
-                    self.toast_text = f"Erreur : {self.recorder.last_error[:28]}"
-                    self.toast_until = time.monotonic() + 5.0
+            if f9 and not self._last_f9:
+                started = self.recorder.toggle(self._get_capture_rect)
+                if started:
+                    self.toast_text = "REC démarré (H.264)"
+                    self.toast_until = time.monotonic() + 2.0
+                else:
+                    saved = self.recorder.last_saved
+                    if saved:
+                        self.toast_text = f"Sauvé : {saved.name}"
+                        self.toast_until = time.monotonic() + 5.0
+                    elif self.recorder.last_error:
+                        self.toast_text = f"Erreur : {self.recorder.last_error[:28]}"
+                        self.toast_until = time.monotonic() + 5.0
 
-        if f10 and not self._last_f10:
-            self.visible = not self.visible
-            if self.visible:
-                self.root.deiconify()
-                self._apply_overlay_style()
-            else:
-                self.root.withdraw()
+            if f10 and not self._last_f10:
+                self.visible = not self.visible
+                if self.visible:
+                    self.root.deiconify()
+                    self._apply_overlay_style()
+                else:
+                    self.root.withdraw()
 
-        if f11 and not self._last_f11:
-            self._quit()
-            return
+            if f11 and not self._last_f11:
+                self._quit()
+                return
 
-        self._last_f9, self._last_f10, self._last_f11 = f9, f10, f11
-        self.root.after(40, self._tick_hotkeys)
+            self._last_f9, self._last_f10, self._last_f11 = f9, f10, f11
+        finally:
+            if not getattr(self, "_closing", False):
+                self.root.after(40, self._tick_hotkeys)
 
     def _rounded_rect(self, x1, y1, x2, y2, r, **kw):
         pts = [
@@ -585,6 +588,13 @@ class ViceOverlayApp:
             self.canvas.create_rectangle(x, y, x + int(w * ratio), y + h, fill=color, outline="")
 
     def _tick_render(self):
+        try:
+            self._render_once()
+        finally:
+            if not getattr(self, "_closing", False):
+                self.root.after(250, self._tick_render)
+
+    def _render_once(self):
         snap = self.telemetry.snapshot()
 
         # Snap cleanly to top-left inside the game client area and keep topmost above D3D12 window.
@@ -710,13 +720,12 @@ class ViceOverlayApp:
                 c.create_text(
                     W // 2, H - 14,
                     text="F9 Record MP4  •  F10 Masquer  •  F11 Quitter",
-                    anchor="center", fill="#7C749A", font=("Segoe UI", 7.5),
+                    anchor="center", fill="#7C749A", font=("Segoe UI", 8),
                 )
             c.update_idletasks()
 
-        self.root.after(250, self._tick_render)
-
     def _quit(self):
+        self._closing = True
         self.recorder.stop()
         self.telemetry.stop()
         try:
