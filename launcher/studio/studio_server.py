@@ -587,16 +587,16 @@ def launch_game(cfg, developer):
     bvh_builder = bool(cfg.get("bvhBuilder", False))
 
     if fast_gpu:
-        # RTX 4070 Laptop 8 GB VRAM / 16 GB RAM — trustno1-coder/VIctory-NVIDIA profile:
-        # - Series S (1080p output, 4K UI plane composed via VICTORY_COMPOSE=1) + half render scale
-        #   (540p -> 1080p via the title's own temporal upscaler VICTORY_OWN_UPSCALER=1): GPU ~6 ms/frame,
-        #   18-31 native FPS on NVIDIA (36-60 FPS with NVIDIA Smooth Motion on victory_sm.exe).
-        # - VICTORY_WINDOWS_BAR_MB=3072: 16 GB RAM fix (keeps shared RAM flat ~4.4 GB, auto-capped at 80% VRAM).
-        # - VICTORY_CARD_BUFFERS_MB=1024 / MIN_MB=1: card-side compares calibrated for 8 GB VRAM.
-        # - VICTORY_DYNAMIC_SLOTS=524288: avoids dropped draws under NVIDIA's 1M heap cap.
-        # - VICTORY_BVH_MISS=1 + scripts/rt_off_hashes.txt: skips broken unbuilt RT passes (-10 ms, fixes white rooms).
-        # - VICTORY_AMBIENT=0.8 / AIR=1.5 / MOST=2 + VICTORY_NAN_SCRUB=1: lit shadows, zero overbright fog, zero NaN blobs.
-        env["VICTORY_TEXTURE_NO_WAIT"] = "1"
+        # RTX 4070 Laptop 8 GB VRAM / 16 GB RAM — trustno1-coder/VIctory-NVIDIA Sharp & Fast profile:
+        # - Series S 720p -> 1080p (VICTORY_RENDER_SCALE=0.667, max safe on Series S; 1.78x pixels vs 540p)
+        #   with 4K UI plane composed via VICTORY_COMPOSE=1 and title's temporal upscaler VICTORY_OWN_UPSCALER=1.
+        # - CRITICAL 8 GB VRAM FIX: default VICTORY_CARD_ROOM_FOR_TARGETS_MB=3072 starved textures to 1.8 GB
+        #   (551 blocked passes, 33,400 evicted textures -> muddy/blurry skin & scenery). Series S targets only
+        #   use ~1013 MB, so setting 1280 MB + ROOM_PERCENT=94 + WIN_BAR=1536 + CARD_BUF=768 unlocks ~2 GB of
+        #   extra VRAM for full-resolution textures while keeping 16 GB RAM safe.
+        # - VICTORY_TEXTURE_NO_WAIT=0 + AWAY_MS=8000: eliminates corrupted/pixelated skin, eyebrows & pop-in.
+        # - VICTORY_BVH_MISS=1 + scripts/rt_off_hashes.txt + AMBIENT=0.8/AIR=1.5/MOST=2 + NAN_SCRUB=1.
+        env["VICTORY_TEXTURE_NO_WAIT"] = "0"
         env["VICTORY_RELAY"] = "2"
         env["VICTORY_CARD_STEPS"] = "2"
         env["VICTORY_WIDE_BACK"] = "1"
@@ -619,16 +619,19 @@ def launch_game(cfg, developer):
         env["VICTORY_UPLOAD_AHEAD"] = "1"
         env["VICTORY_PIPELINE_WAIT_MS"] = "10000"
         env["VICTORY_DYNAMIC_SLOTS"] = "524288"
-        env["VICTORY_RENDER_SCALE"] = "0.5"
+        env["VICTORY_RENDER_SCALE"] = "0.667"
         env["VICTORY_OWN_UPSCALER"] = "1"
         env["VICTORY_BVH_MISS"] = "0" if bvh_builder else "1"
         env["VICTORY_CARD_BUFFERS_MIN_MB"] = "1"
-        env["VICTORY_CARD_BUFFERS_MB"] = "1024"
+        env["VICTORY_CARD_BUFFERS_MB"] = "768"
+        env["VICTORY_CARD_ROOM_FOR_TARGETS_MB"] = "1280"
+        env["VICTORY_TEXTURE_ROOM_PERCENT"] = "94"
+        env["VICTORY_TEXTURE_AWAY_MS"] = "8000"
         env["VICTORY_COMPOSE"] = "1"
-        env["VICTORY_WINDOWS_BAR_MB"] = "3072"
+        env["VICTORY_WINDOWS_BAR_MB"] = "1536"
         env["VICTORY_NO_WATCHDOG"] = "1"
     else:
-        # Quality / conservative mode (~13 FPS native, fewer stretched bodies & rainbow skin)
+        # Quality / Zero-glitch mode: RELAY=1 + CARD_STEPS=0 (no stretched/jumping bodies) + 720p + crisp textures
         env["VICTORY_TEXTURE_NO_WAIT"] = "0"
         env["VICTORY_RELAY"] = "1"
         env["VICTORY_CARD_STEPS"] = "0"
@@ -652,13 +655,16 @@ def launch_game(cfg, developer):
         env["VICTORY_UPLOAD_AHEAD"] = "1"
         env["VICTORY_PIPELINE_WAIT_MS"] = "10000"
         env["VICTORY_DYNAMIC_SLOTS"] = "524288"
-        env["VICTORY_RENDER_SCALE"] = "0.5"
+        env["VICTORY_RENDER_SCALE"] = "0.667"
         env["VICTORY_OWN_UPSCALER"] = "1"
         env["VICTORY_BVH_MISS"] = "0" if bvh_builder else "1"
         env["VICTORY_CARD_BUFFERS_MIN_MB"] = "1"
-        env["VICTORY_CARD_BUFFERS_MB"] = "1024"
+        env["VICTORY_CARD_BUFFERS_MB"] = "768"
+        env["VICTORY_CARD_ROOM_FOR_TARGETS_MB"] = "1280"
+        env["VICTORY_TEXTURE_ROOM_PERCENT"] = "94"
+        env["VICTORY_TEXTURE_AWAY_MS"] = "8000"
         env["VICTORY_COMPOSE"] = "1"
-        env["VICTORY_WINDOWS_BAR_MB"] = "3072"
+        env["VICTORY_WINDOWS_BAR_MB"] = "1536"
         env["VICTORY_NO_WATCHDOG"] = "1"
 
     rt_hashes_file = ENGINE / "scripts" / "rt_off_hashes.txt"
