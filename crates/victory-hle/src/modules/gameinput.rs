@@ -100,7 +100,7 @@ const PC_AZERTY_BUTTONS: [(u8, u32); 22] = [
     (b'X', RIGHT_SHOULDER), // X -> Cover / RB
     (0xA2, LEFT_STICK),     // Left Ctrl -> Crouch / Stealth (L3)
     (b'C', RIGHT_STICK),    // C -> Look behind / Zoom (R3)
-    (b'E', RIGHT),          // E -> Interact (D-Pad Right)
+    (b'E', A | RIGHT),      // E -> Interact / Talk (A + D-Pad Right)
     (b'T', UP),             // T -> Phone (D-Pad Up)
     (0xA4, DOWN),           // Left Alt -> Character wheel / Minimap (D-Pad Down)
     (0x26, UP),             // Up arrow -> Phone / D-Pad Up
@@ -125,7 +125,7 @@ const PC_QWERTY_BUTTONS: [(u8, u32); 22] = [
     (b'X', RIGHT_SHOULDER),
     (0xA2, LEFT_STICK),
     (b'C', RIGHT_STICK),
-    (b'E', RIGHT),
+    (b'E', A | RIGHT),
     (b'T', UP),
     (0xA4, DOWN),
     (0x26, UP),

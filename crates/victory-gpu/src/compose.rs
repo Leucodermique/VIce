@@ -94,7 +94,9 @@ int classify_abxy_color(float4 c) {
     return -1;
 }
 
-// Classifies the black letter inside GTA VI's monochrome white circular button (A/B/X/Y).
+// Classifies the black letter inside GTA VI's monochrome white circular button:
+// A -> E (tile 8, interact/talk), B -> R (tile 5), X -> SPACE (tile 6), Y -> F (tile 7),
+// R (right stick) -> Mouse (tile 0).
 int classify_white_circle_letter(float2 p, float scale) {
     float d = 4.0 * scale;
     bool top = is_dark_ink(sample_ui_px(p + float2(0.0, -d)));
@@ -102,15 +104,17 @@ int classify_white_circle_letter(float2 p, float scale) {
     bool mid = is_dark_ink(sample_ui_px(p));
     bool tl  = is_dark_ink(sample_ui_px(p + float2(-3.0 * scale, -d)));
     bool tr  = is_dark_ink(sample_ui_px(p + float2( 3.0 * scale, -d)));
-    // A: dark apex at top, open white space at bottom center, white at top corners -> MAJ (4)
-    if (top && !bot && (!tl || !tr)) return 4;
+    // R (right stick, e.g. "Utilisez (R) pour braquer"): top & top-left vertical stem dark, bottom center open -> Mouse (0)
+    if (top && !bot && tl && !tr) return 0;
+    // A: dark apex at top, open white space at bottom center, white at top corners -> E (8)
+    if (top && !bot && (!tl || !tr)) return 8;
     // Y: open white space at top center, dark vertical stem at bottom center -> F (7)
     if (!top && bot) return 7;
     // X: open white top & bottom center, dark crossing center -> SPACE (6)
     if (!top && !bot && mid) return 6;
     // B: dark top and bottom strokes -> R (5)
     if (top && bot) return 5;
-    return 4;
+    return 8;
 }
 
 void push_candidate(float2 p, uint icon, uint style, float score) {
@@ -151,39 +155,82 @@ void detect_hits(uint3 tid : SV_DispatchThreadID) {
 
     float4 center = sample_ui_px(p);
 
-    // ---- MODE A: Floating bottom-right interaction prompts (no dark box) ----
-    // e.g. "PARLER (A)" monochrome white circle & "YOLANDA ((LT))" ring-hold prompt.
-    if (p.x > float(w) * 0.62 && p.y > float(h) * 0.50) {
-        // A1) Hold-ring prompt: crisp white ring at radius ~18px, transparent outside at ~23px.
-        uint ring18 = 0u;
-        uint ring23 = 0u;
-        for (uint k = 0u; k < 16u; k++) {
-            float ang = float(k) * (TWO_PI / 16.0);
-            float2 dir = float2(cos(ang), sin(ang));
-            if (is_white_glyph(sample_ui_px(p + dir * (18.0 * scale)))) ring18++;
-            if (is_white_glyph(sample_ui_px(p + dir * (23.0 * scale)))) ring23++;
-        }
-        if (ring18 >= 13u && ring23 <= 2u) {
-            float inner_w = 0.0;
-            float bl = 0.0, br = 0.0;
-            for (int j = 0; j < 6; j++) {
-                for (int i = 0; i < 6; i++) {
-                    float2 off = float2(-9.0 + float(i) * (18.0 / 5.0), -9.0 + float(j) * (18.0 / 5.0)) * scale;
-                    float v = is_white_glyph(sample_ui_px(p + off)) ? 1.0 : 0.0;
-                    inner_w += v;
-                    if (j >= 4 && i < 2) bl += v;
-                    if (j >= 4 && i >= 4) br += v;
-                }
+    // ---- MODE A: Floating interaction & objective prompts (no dark box) ----
+    // Bottom-right ("PARLER (A)", "MENACER (X)", "YOLANDA / EMPLOYE ((LT))")
+    // and bottom-center ("Maintenez [LT] pour viser.", "Appuyez sur (X) pour menacer.", "Utilisez (R)...").
+    bool in_bottom_right = (p.x > float(w) * 0.62 && p.y > float(h) * 0.50);
+    bool in_bottom_center = (p.x > float(w) * 0.25 && p.x < float(w) * 0.78 && p.y > float(h) * 0.85);
+    if (in_bottom_right || in_bottom_center) {
+        // A1) Hold-ring prompt (bottom-right): crisp white ring at radius ~18px, transparent outside at ~23px.
+        if (in_bottom_right) {
+            uint ring18 = 0u;
+            uint ring23 = 0u;
+            for (uint k = 0u; k < 16u; k++) {
+                float ang = float(k) * (TWO_PI / 16.0);
+                float2 dir = float2(cos(ang), sin(ang));
+                if (is_white_glyph(sample_ui_px(p + dir * (18.0 * scale)))) ring18++;
+                if (is_white_glyph(sample_ui_px(p + dir * (23.0 * scale)))) ring23++;
             }
-            float fill = inner_w / 36.0;
-            if (fill >= 0.42) {
-                uint icon = (br > bl + 0.5) ? 1u : 0u; // LT -> RMB (0), RT -> LMB (1)
-                push_candidate(p, icon, 2u, fill);
-                return;
+            if (ring18 >= 13u && ring23 <= 2u) {
+                float inner_w = 0.0;
+                float bl = 0.0, br = 0.0;
+                for (int j = 0; j < 6; j++) {
+                    for (int i = 0; i < 6; i++) {
+                        float2 off = float2(-9.0 + float(i) * (18.0 / 5.0), -9.0 + float(j) * (18.0 / 5.0)) * scale;
+                        float v = is_white_glyph(sample_ui_px(p + off)) ? 1.0 : 0.0;
+                        inner_w += v;
+                        if (j >= 4 && i < 2) bl += v;
+                        if (j >= 4 && i >= 4) br += v;
+                    }
+                }
+                float fill = inner_w / 36.0;
+                if (fill >= 0.42) {
+                    uint icon = (br > bl + 0.5) ? 1u : 0u; // LT -> RMB (0), RT -> LMB (1)
+                    push_candidate(p, icon, 2u, fill);
+                    return;
+                }
             }
         }
 
-        // A2) Monochrome white circular button (PARLER (A), (B), (X), (Y)):
+        // A2) Floating LT/RT trigger in bottom-center subtitle prompts (e.g. "Maintenez [LT] pour viser.")
+        if (in_bottom_center && center.a > 0.65) {
+            float pad_f = 16.0 * scale;
+            bool clear_top_bot = sample_ui_px(p + float2(0.0, -pad_f)).a < 0.30
+                              && sample_ui_px(p + float2(0.0,  pad_f)).a < 0.30;
+            if (clear_top_bot) {
+                float half_f = 11.0 * scale;
+                float total = 0.0, top_bar = 0.0, bot_bar = 0.0;
+                float tl = 0.0, tr = 0.0, bl = 0.0, br = 0.0;
+                for (int j = 0; j < 8; j++) {
+                    for (int i = 0; i < 8; i++) {
+                        float2 off = float2(-half_f + float(i) * (2.0 * half_f / 7.0),
+                                            -half_f + float(j) * (2.0 * half_f / 7.0));
+                        float v = is_white_glyph(sample_ui_px(p + off)) ? 1.0 : 0.0;
+                        total += v;
+                        if (j < 2 && i >= 1 && i <= 6) top_bar += v;
+                        if (j >= 6 && i >= 1 && i <= 6) bot_bar += v;
+                        if (j < 2 && i < 2) tl += v;
+                        if (j < 2 && i >= 6) tr += v;
+                        if (j >= 6 && i < 2) bl += v;
+                        if (j >= 6 && i >= 6) br += v;
+                    }
+                }
+                float fill = total / 64.0;
+                if (fill >= 0.46 && top_bar / 12.0 >= 0.58 && bot_bar / 12.0 >= 0.48) {
+                    tl *= 0.25; tr *= 0.25; bl *= 0.25; br *= 0.25;
+                    if (tl >= 0.45 && tr >= 0.45 && bl >= 0.45 && br <= 0.35 && (bl - br) >= 0.25) {
+                        push_candidate(p, 0u, 1u, fill);
+                        return;
+                    }
+                    if (tl >= 0.45 && tr >= 0.45 && br >= 0.45 && bl <= 0.35 && (br - bl) >= 0.25) {
+                        push_candidate(p, 1u, 1u, fill);
+                        return;
+                    }
+                }
+            }
+        }
+
+        // A3) Monochrome white circular button (PARLER (A), MENACER (X), (B), (Y), (R)):
         // White perimeter at radius ~10px, non-white corners at +-13.5px, dark letter inside.
         uint ring10 = 0u;
         for (uint k = 0u; k < 12u; k++) {
