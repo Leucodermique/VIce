@@ -51,23 +51,16 @@ RWTexture2D<float4> outp : register(u0);
 
 // Prompt detection state (raw u32 buffer):
 // dword 0: raw candidate count (0..64)
-// dwords 1..1 + 64*4: raw candidates (cx, cy, icon_id, score_u32)
+// dwords 1..1 + 64*4: raw candidates (cx, cy, packed_kind_flags, score_u32)
+//   packed_kind_flags: bits 0..7 = icon_id (0..9), bits 8..15 = style (0=box popup, 1=floating circle, 2=ring inner)
 // dword 260: merged hit count (0..8)
-// dwords 261..261 + 8*6: merged hits (cx, cy, hw, hh, icon_id, packed_bg_rgba8)
+// dwords 261..261 + 8*6: merged hits (cx, cy, hw, hh, icon_id, style)
 RWByteAddressBuffer prompts : register(u1);
 
 SamplerState linear_clamp : register(s0);
 
 static const float3 LUMA = float3(0.299, 0.587, 0.114);
-
-uint pack_rgba8(float4 c) {
-    uint4 q = uint4(saturate(c) * 255.0 + 0.5);
-    return q.r | (q.g << 8) | (q.b << 16) | (q.a << 24);
-}
-
-float4 unpack_rgba8(uint v) {
-    return float4(v & 255u, (v >> 8) & 255u, (v >> 16) & 255u, (v >> 24) & 255u) / 255.0;
-}
+static const float TWO_PI = 6.28318530718;
 
 float4 sample_ui_px(float2 px) {
     float2 uv = (px + 0.5) / float2(w, h);
@@ -76,24 +69,58 @@ float4 sample_ui_px(float2 px) {
 
 bool is_popup_bg(float4 c) {
     float l = dot(c.rgb, LUMA);
-    return c.a > 0.65 && l < 0.26;
+    return c.a > 0.55 && l < 0.28;
 }
 
 bool is_white_glyph(float4 c) {
     float l = dot(c.rgb, LUMA);
     float hi = max(c.r, max(c.g, c.b));
     float lo = min(c.r, min(c.g, c.b));
-    return c.a > 0.80 && l > 0.70 && (hi - lo) < 0.22;
+    return c.a > 0.78 && l > 0.70 && (hi - lo) < 0.22;
+}
+
+bool is_dark_ink(float4 c) {
+    float l = dot(c.rgb, LUMA);
+    return c.a > 0.50 && l < 0.48;
 }
 
 // 4: A (green), 5: B (red), 6: X (blue), 7: Y (yellow), -1: none
-int classify_abxy(float4 c) {
+int classify_abxy_color(float4 c) {
     if (c.a < 0.75) return -1;
     if (c.g > 0.42 && (c.g - c.r) > 0.15 && (c.g - c.b) > 0.15) return 4;
     if (c.r > 0.52 && (c.r - c.g) > 0.20 && (c.r - c.b) > 0.20) return 5;
     if (c.b > 0.48 && (c.b - c.r) > 0.18 && c.g > 0.18) return 6;
     if (c.r > 0.62 && c.g > 0.50 && c.b < 0.30 && (c.r - c.b) > 0.38) return 7;
     return -1;
+}
+
+// Classifies the black letter inside GTA VI's monochrome white circular button (A/B/X/Y).
+int classify_white_circle_letter(float2 p, float scale) {
+    float d = 4.0 * scale;
+    bool top = is_dark_ink(sample_ui_px(p + float2(0.0, -d)));
+    bool bot = is_dark_ink(sample_ui_px(p + float2(0.0,  d)));
+    bool mid = is_dark_ink(sample_ui_px(p));
+    bool tl  = is_dark_ink(sample_ui_px(p + float2(-3.0 * scale, -d)));
+    bool tr  = is_dark_ink(sample_ui_px(p + float2( 3.0 * scale, -d)));
+    // A: dark apex at top, open white space at bottom center, white at top corners -> MAJ (4)
+    if (top && !bot && (!tl || !tr)) return 4;
+    // Y: open white space at top center, dark vertical stem at bottom center -> F (7)
+    if (!top && bot) return 7;
+    // X: open white top & bottom center, dark crossing center -> SPACE (6)
+    if (!top && !bot && mid) return 6;
+    // B: dark top and bottom strokes -> R (5)
+    if (top && bot) return 5;
+    return 4;
+}
+
+void push_candidate(float2 p, uint icon, uint style, float score) {
+    uint slot;
+    prompts.InterlockedAdd(0, 1, slot);
+    if (slot < 64u) {
+        uint base = (1u + slot * 4u) * 4u;
+        uint packed = (icon & 0xFFu) | ((style & 0xFFu) << 8);
+        prompts.Store4(base, uint4(uint(p.x), uint(p.y), packed, uint(score * 1000.0)));
+    }
 }
 
 #ifdef CLEAR_HITS
@@ -106,14 +133,15 @@ void clear_hits() {
 #endif
 
 #ifdef DETECT_HITS
-// Runs on a 4px grid (w/4 x h/4): detects Xbox button prompts inside dark HUD pop-up boxes.
+// Runs on a 4px grid (w/4 x h/4): detects Xbox button prompts both inside dark HUD
+// pop-up boxes (top-left) and floating interaction prompts (bottom-right: PARLER A / YOLANDA LT).
 [RootSignature(RS)]
 [numthreads(8, 8, 1)]
 void detect_hits(uint3 tid : SV_DispatchThreadID) {
     float scale = float(h) / 1080.0;
     float2 p = float2(tid.xy * 4u + 2u);
-    if (p.x < 24.0 * scale || p.x >= float(w) - 24.0 * scale ||
-        p.y < 24.0 * scale || p.y >= float(h) - 24.0 * scale) {
+    if (p.x < 26.0 * scale || p.x >= float(w) - 26.0 * scale ||
+        p.y < 26.0 * scale || p.y >= float(h) - 26.0 * scale) {
         return;
     }
     // Exclude bottom-left minimap/radar region to guarantee zero false positives.
@@ -122,9 +150,76 @@ void detect_hits(uint3 tid : SV_DispatchThreadID) {
     }
 
     float4 center = sample_ui_px(p);
+
+    // ---- MODE A: Floating bottom-right interaction prompts (no dark box) ----
+    // e.g. "PARLER (A)" monochrome white circle & "YOLANDA ((LT))" ring-hold prompt.
+    if (p.x > float(w) * 0.62 && p.y > float(h) * 0.50) {
+        // A1) Hold-ring prompt: crisp white ring at radius ~18px, transparent outside at ~23px.
+        uint ring18 = 0u;
+        uint ring23 = 0u;
+        for (uint k = 0u; k < 16u; k++) {
+            float ang = float(k) * (TWO_PI / 16.0);
+            float2 dir = float2(cos(ang), sin(ang));
+            if (is_white_glyph(sample_ui_px(p + dir * (18.0 * scale)))) ring18++;
+            if (is_white_glyph(sample_ui_px(p + dir * (23.0 * scale)))) ring23++;
+        }
+        if (ring18 >= 13u && ring23 <= 2u) {
+            float inner_w = 0.0;
+            float bl = 0.0, br = 0.0;
+            for (int j = 0; j < 6; j++) {
+                for (int i = 0; i < 6; i++) {
+                    float2 off = float2(-9.0 + float(i) * (18.0 / 5.0), -9.0 + float(j) * (18.0 / 5.0)) * scale;
+                    float v = is_white_glyph(sample_ui_px(p + off)) ? 1.0 : 0.0;
+                    inner_w += v;
+                    if (j >= 4 && i < 2) bl += v;
+                    if (j >= 4 && i >= 4) br += v;
+                }
+            }
+            float fill = inner_w / 36.0;
+            if (fill >= 0.42) {
+                uint icon = (br > bl + 0.5) ? 1u : 0u; // LT -> RMB (0), RT -> LMB (1)
+                push_candidate(p, icon, 2u, fill);
+                return;
+            }
+        }
+
+        // A2) Monochrome white circular button (PARLER (A), (B), (X), (Y)):
+        // White perimeter at radius ~10px, non-white corners at +-13.5px, dark letter inside.
+        uint ring10 = 0u;
+        for (uint k = 0u; k < 12u; k++) {
+            float ang = float(k) * (TWO_PI / 12.0);
+            float2 dir = float2(cos(ang), sin(ang));
+            if (is_white_glyph(sample_ui_px(p + dir * (10.0 * scale)))) ring10++;
+        }
+        if (ring10 >= 10u) {
+            float c_off = 13.5 * scale;
+            bool any_corner_white =
+                is_white_glyph(sample_ui_px(p + float2(-c_off, -c_off))) ||
+                is_white_glyph(sample_ui_px(p + float2( c_off, -c_off))) ||
+                is_white_glyph(sample_ui_px(p + float2(-c_off,  c_off))) ||
+                is_white_glyph(sample_ui_px(p + float2( c_off,  c_off)));
+            if (!any_corner_white) {
+                uint dark_cnt = 0u;
+                for (int dy = -1; dy <= 1; dy++) {
+                    for (int dx = -1; dx <= 1; dx++) {
+                        if (is_dark_ink(sample_ui_px(p + float2(float(dx) * 4.0, float(dy) * 4.0) * scale))) {
+                            dark_cnt++;
+                        }
+                    }
+                }
+                if (dark_cnt >= 2u) {
+                    int icon = classify_white_circle_letter(p, scale);
+                    push_candidate(p, uint(icon), 1u, float(ring10) / 12.0);
+                    return;
+                }
+            }
+        }
+    }
+
+    // ---- MODE B: Dark pop-up box prompts (e.g. "Maintenez [LT] pour interagir.") ----
     if (center.a < 0.65) return;
 
-    float pad = 16.0 * scale;
+    float pad = 17.0 * scale;
     float4 top_bg = sample_ui_px(p + float2(0.0, -pad));
     float4 bot_bg = sample_ui_px(p + float2(0.0,  pad));
     float4 l_bg   = sample_ui_px(p + float2(-pad, 0.0));
@@ -132,8 +227,8 @@ void detect_hits(uint3 tid : SV_DispatchThreadID) {
     if (!is_popup_bg(top_bg) || !is_popup_bg(bot_bg)) return;
     if (!is_popup_bg(l_bg) || !is_popup_bg(r_bg)) return;
 
-    // 1) Colored A/B/X/Y circle buttons inside pop-up boxes.
-    int col_icon = classify_abxy(center);
+    // B1) Colored A/B/X/Y circle buttons inside pop-up boxes.
+    int col_icon = classify_abxy_color(center);
     if (col_icon >= 0) {
         float match_cnt = 0.0;
         float half_box = 10.5 * scale;
@@ -141,25 +236,19 @@ void detect_hits(uint3 tid : SV_DispatchThreadID) {
             for (int i = 0; i < 6; i++) {
                 float2 off = float2(-half_box + float(i) * (2.0 * half_box / 5.0),
                                     -half_box + float(j) * (2.0 * half_box / 5.0));
-                if (classify_abxy(sample_ui_px(p + off)) == col_icon) {
+                if (classify_abxy_color(sample_ui_px(p + off)) == col_icon) {
                     match_cnt += 1.0;
                 }
             }
         }
         float ratio = match_cnt / 36.0;
         if (ratio >= 0.36) {
-            uint slot;
-            prompts.InterlockedAdd(0, 1, slot);
-            if (slot < 64u) {
-                uint base = (1u + slot * 4u) * 4u;
-                prompts.Store4(base, uint4(uint(p.x), uint(p.y), uint(col_icon), uint(ratio * 1000.0)));
-            }
+            push_candidate(p, uint(col_icon), 0u, ratio);
         }
         return;
     }
 
-    // 2) Solid white trigger/bumper silhouettes (LT, RT, LB, RB) with dark inner letters.
-    // Measure an 8x8 white-density grid across a ~23px box (scaled for output height).
+    // B2) Solid white trigger/bumper silhouettes (LT, RT, LB, RB) with dark inner letters.
     float half_w = 11.5 * scale;
     float half_h = 11.5 * scale;
     float total = 0.0;
@@ -207,12 +296,7 @@ void detect_hits(uint3 tid : SV_DispatchThreadID) {
     }
 
     if (icon >= 0) {
-        uint slot;
-        prompts.InterlockedAdd(0, 1, slot);
-        if (slot < 64u) {
-            uint base = (1u + slot * 4u) * 4u;
-            prompts.Store4(base, uint4(uint(p.x), uint(p.y), uint(icon), uint(fill * 1000.0)));
-        }
+        push_candidate(p, uint(icon), 0u, fill);
     }
 }
 #endif
@@ -256,12 +340,15 @@ void merge_hits() {
         }
         float cx = sx / max(sw, 1.0);
         float cy = sy / max(sw, 1.0);
-        float4 bg = sample_ui_px(float2(cx, cy - 16.0 * scale));
-        uint hw = uint(15.0 * scale + 0.5);
-        uint hh = uint(15.0 * scale + 0.5);
+        uint icon = a.z & 0xFFu;
+        uint style = (a.z >> 8) & 0xFFu;
+        // style 0: popup box icon (15px), style 1: floating circle (15px), style 2: inside hold ring (12px)
+        float rad = (style == 2u) ? 12.0 : 15.0;
+        uint hw = uint(rad * scale + 0.5);
+        uint hh = uint(rad * scale + 0.5);
         uint dst = (261u + out_n * 6u) * 4u;
         prompts.Store4(dst, uint4(uint(cx + 0.5), uint(cy + 0.5), hw, hh));
-        prompts.Store2(dst + 16u, uint2(a.z, pack_rgba8(bg)));
+        prompts.Store2(dst + 16u, uint2(icon, style));
         out_n++;
     }
     prompts.Store(260 * 4, out_n);
@@ -281,7 +368,6 @@ float3 sharpen_game(int2 p) {
 
     float3 mn = min(c, min(min(n, s), min(e, b)));
     float3 mx = max(c, max(max(n, s), max(e, b)));
-    // Local contrast weight avoids haloing on sharp edges while crisping subtle detail.
     float3 amp = saturate(min(mn, 1.0 - mx) / max(mx, 1e-4));
     float3 weight = sqrt(amp) * (-0.16 * sharpen);
     float3 res = (c + (n + s + e + b) * weight) / (1.0 + 4.0 * weight);
@@ -297,6 +383,7 @@ void main(uint3 id : SV_DispatchThreadID) {
     float4 u = ui.SampleLevel(linear_clamp, uv, 0);
 
     if (pc_prompts != 0u) {
+        float scale = float(h) / 1080.0;
         uint n = min(prompts.Load(260 * 4), 8u);
         for (uint k = 0u; k < n; k++) {
             uint src = (261u + k * 6u) * 4u;
@@ -304,18 +391,44 @@ void main(uint3 id : SV_DispatchThreadID) {
             uint2 meta = prompts.Load2(src + 16u);
             float2 cpos = float2(box.xy);
             float2 half_sz = float2(box.zw);
+            uint icon = meta.x;
+            uint style = meta.y;
+
             float2 rel = (float2(id.xy) - cpos) / max(half_sz, float2(1.0, 1.0));
-            if (abs(rel.x) <= 1.0 && abs(rel.y) <= 1.0) {
-                float2 tile_uv = rel * 0.5 + 0.5;
-                float u_atlas = (float(meta.x) + tile_uv.x) / 10.0;
-                float glyph = atlas.SampleLevel(linear_clamp, float2(u_atlas, tile_uv.y), 0);
-                float4 bg = unpack_rgba8(meta.y);
-                float3 fg = float3(0.96, 0.96, 0.96);
-                float3 replaced = lerp(bg.rgb, fg, glyph);
-                float alpha = max(bg.a, glyph);
-                u = float4(premultiplied != 0u ? replaced * alpha : replaced, alpha);
-                break;
+            if (abs(rel.x) > 1.0 || abs(rel.y) > 1.0) continue;
+            // For ring-hold prompt (style 2), keep GTA VI's outer white hold ring intact!
+            if (style == 2u && dot(rel, rel) > 1.05) continue;
+
+            float2 tile_uv = rel * 0.5 + 0.5;
+            float u_atlas = (float(icon) + tile_uv.x) / 10.0;
+            float glyph = atlas.SampleLevel(linear_clamp, float2(u_atlas, tile_uv.y), 0);
+
+            float4 bg;
+            if (style == 0u) {
+                // Sample clean pop-up box background well outside the 2px icon shadow (+-7px past box edge)
+                // so there is NEVER a black square behind the PC icon!
+                float margin = 7.0 * scale;
+                float4 bg_top = sample_ui_px(float2(float(id.x), cpos.y - half_sz.y - margin));
+                float4 bg_bot = sample_ui_px(float2(float(id.x), cpos.y + half_sz.y + margin));
+                // Prefer the lighter/less opaque sample to avoid dark borders/drop-shadows.
+                bg = (dot(bg_top.rgb, LUMA) >= dot(bg_bot.rgb, LUMA)) ? bg_top : bg_bot;
+                if (bg.a < 0.25) bg = float4(0.0, 0.0, 0.0, 0.0);
+            } else {
+                // Floating bottom-right prompts: 100% transparent background (no dark square at all!).
+                bg = float4(0.0, 0.0, 0.0, 0.0);
+                // Subtle dark ink strictly inside keycap letters (icons >= 2) so white keycap text stays legible.
+                if (icon >= 2u && abs(rel.x) < 0.72 && abs(rel.y) < 0.72) {
+                    bg = float4(0.06, 0.06, 0.08, 0.72);
+                }
             }
+
+            float3 fg = float3(0.96, 0.96, 0.96);
+            float out_a = saturate(glyph + bg.a * (1.0 - glyph));
+            float3 out_rgb = (out_a > 1e-4)
+                ? (fg * glyph + bg.rgb * bg.a * (1.0 - glyph)) / out_a
+                : float3(0.0, 0.0, 0.0);
+            u = float4(premultiplied != 0u ? out_rgb * out_a : out_rgb, out_a);
+            break;
         }
     }
 
@@ -667,7 +780,6 @@ pub(crate) fn record(
             list.CopyTextureRegion(&dst_loc, 0, 0, 0, &src_loc, None);
             let bar = [t(&pass.atlas, D3D12_RESOURCE_STATE_COPY_DEST, read)];
             list.ResourceBarrier(&bar);
-            // Keep upload resource alive past this first command list execution (only 48 KiB).
             std::mem::forget(upload);
             std::mem::forget(dst_loc);
             std::mem::forget(src_loc);
@@ -812,4 +924,3 @@ mod tests {
         }
     }
 }
-
