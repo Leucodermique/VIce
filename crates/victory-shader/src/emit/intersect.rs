@@ -16,7 +16,6 @@
 //!
 //! ```text
 //! kind = pointer & 7
-//! no structures built (USER_STRUCTURES 0): no hit, nothing read
 //! box (4, 5):  4 child pointers; 24 box floats (kind 5) or 24 halves widened (kind 4);
 //!              four slab tests; the sorting network
 //! triangle (0-3): the id dword, three vertices at the bytes it names; the watertight test
@@ -28,7 +27,6 @@
 
 use super::{Attr, Bin, Fields, Inst, Lower, Operand, Reg, Term, V, Why, flags, pred};
 use crate::bvh;
-use crate::native::RootType;
 use crate::resource::BvhNodes;
 
 #[cfg(test)]
@@ -39,6 +37,33 @@ thread_local! {
     /// and their directory.)
     pub(in crate::emit) static TEST_MEMORY: std::cell::Cell<Option<(u32, u64)>> =
         const { std::cell::Cell::new(None) };
+    /// The tests' way to translate as with `VICTORY_BVH_NO_HIT=1`
+    /// ([`no_hit`]).
+    pub(in crate::emit) static TEST_NO_HIT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether a node test answers "no hit" and reads nothing
+/// (`VICTORY_BVH_NO_HIT=1`; off by default; never with
+/// `VICTORY_BVH_BUILDER=1`, which has the structures built).
+///
+/// The title's structure builder does not run in the layer unless asked
+/// for, and the title's ray-traced passes run all the same: each node test
+/// then reads whatever bytes lie where a structure would be, in a walk the
+/// title bounds at 65,535 steps a wave. What comes back is not the scene:
+/// it differs from launch to launch, and how long a pass runs depends on
+/// those bytes. With the switch a box node enters no child and any other
+/// node is missed, as in a scene with nothing in it: every ray leaves at
+/// its first test, shadow rays find no occluder, and the answer is the same
+/// in every run. (The idea is fork pull request #994's, which asks a host
+/// word at run time; here it is a translation, since the builder's state
+/// does not change during a run of ours.)
+fn no_hit() -> bool {
+    #[cfg(test)]
+    if TEST_NO_HIT.get() {
+        return true;
+    }
+    std::env::var_os("VICTORY_BVH_NO_HIT").is_some_and(|v| v == "1")
+        && std::env::var_os("VICTORY_BVH_BUILDER").is_none_or(|v| v != "1")
 }
 
 /// Where the instruction's node is.
@@ -136,17 +161,22 @@ impl<'a> Lower<'a> {
             inverse: [f[7], f[8], f[9]],
         };
         let c = self.cur;
-        // Whether the title's structures were built (`USER_STRUCTURES`):
-        // while not, no lane reads a node or looks for its copy.
-        let built = {
-            let word = self.host_word(RootType::Other(super::super::shader::USER_STRUCTURES), 0, 0);
-            let zero = self.s.m.i32(0);
-            self.s.m.cmp(c, pred::NE, word, zero)
-        };
-        let reads = Some(match guard {
-            Some(g) => self.s.m.bin(c, Bin::And, g, built),
-            None => built,
-        });
+        if no_hit() {
+            // No structures: a box enters no child, anything else is
+            // missed ([`no_hit`]). Nothing is read, and nothing asked of
+            // the directory of title memory.
+            let _ = &ray;
+            let (k4, k6) = (self.s.m.i32(4), self.s.m.i32(6));
+            let pair = self.s.m.bin(c, Bin::And, pointer, k6);
+            let is_box = self.s.m.cmp(c, pred::EQ, pair, k4);
+            let none = self.s.m.i32(bvh::NONE);
+            for (k, miss) in bvh::MISS.into_iter().enumerate() {
+                let miss = self.s.m.i32(miss.to_bits());
+                let r = self.s.m.select(c, is_box, none, miss);
+                self.write(inst, Reg::V(dst + k as u8), r, guard);
+            }
+            return Ok(());
+        }
         let at = match nodes {
             BvhNodes::Resource => {
                 let src = self
@@ -176,7 +206,7 @@ impl<'a> Lower<'a> {
                 // One look for the node's copy, before the branches: a
                 // node is 64 bytes on 64, so its first half lies in one
                 // 64 KiB page whatever its kind.
-                let (handle, byte) = self.bvh_memory(low, high, reads);
+                let (handle, byte) = self.bvh_memory(low, high, guard);
                 NodeAt::Memory {
                     handle,
                     byte,
@@ -195,21 +225,12 @@ impl<'a> Lower<'a> {
         let is_triangle = self.s.m.cmp(head, pred::IULT, kind, k4);
         let (box_block, leaf_block) = (self.s.m.new_block(), self.s.m.new_block());
         let (triangle_block, join) = (self.s.m.new_block(), self.s.m.new_block());
-        let (tested, nothing) = (self.s.m.new_block(), self.s.m.new_block());
-        self.s.m.terminate(head, Term::CondBr(built, tested, nothing));
         self.s
             .m
-            .terminate(tested, Term::CondBr(is_box, box_block, leaf_block));
+            .terminate(head, Term::CondBr(is_box, box_block, leaf_block));
         self.s
             .m
             .terminate(leaf_block, Term::CondBr(is_triangle, triangle_block, join));
-        // Kinds 6 and 7 (an instance, a procedural primitive): not known
-        // what the console returns; the title's programs do not read it.
-        let other = bvh::MISS.map(|f| self.s.m.i32(f.to_bits()));
-        // No structures: a box enters no child, anything else is missed.
-        let none = self.s.m.i32(bvh::NONE);
-        let absent: [V; 4] = std::array::from_fn(|k| self.s.m.select(nothing, is_box, none, other[k]));
-        self.s.m.terminate(nothing, Term::Br(join));
         self.cur = box_block;
         let boxes = self.bvh_boxes(at, kind, &ray, sort);
         let box_end = self.cur;
@@ -219,6 +240,9 @@ impl<'a> Lower<'a> {
         let triangle_end = self.cur;
         self.s.m.terminate(triangle_end, Term::Br(join));
         self.cur = join;
+        // Kinds 6 and 7 (an instance, a procedural primitive): not known
+        // what the console returns; the title's programs do not read it.
+        let other = bvh::MISS.map(|f| self.s.m.i32(f.to_bits()));
         let i32t = self.s.t.i32;
         let mut results = Vec::with_capacity(4);
         for k in 0..4 {
@@ -229,7 +253,6 @@ impl<'a> Lower<'a> {
                     (boxes[k], box_end),
                     (triangle[k], triangle_end),
                     (other[k], leaf_block),
-                    (absent[k], nothing),
                 ],
             );
             results.push((phi, zero));

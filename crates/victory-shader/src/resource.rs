@@ -46,13 +46,6 @@ pub const CODE: usize = usize::MAX;
 /// 64-bit address from the instruction's operands.
 pub const MEMORY: usize = usize::MAX - 1;
 
-/// [`Address::param`] of the console driver's table that user data 0 and 1
-/// (s8 and s9 of a merged stage) point at, which a geometry program reads
-/// its GS-VS ring's place in LDS from. The host has no such ring (the
-/// program's ring accesses are its inputs and outputs,
-/// [`crate::geometry::Rings`]), so what such a load reads is never needed.
-pub const DRIVER: usize = usize::MAX - 2;
-
 /// The reasons an address traces to no root parameter for which the
 /// address is then taken as it stands ([`MEMORY`]).
 const RAW: [&str; 5] = [
@@ -230,11 +223,7 @@ pub fn track(
     // and loads that entry: accesses, offset reads and loads by block.
     let mut offset_at =
         std::collections::BTreeMap::<usize, (Vec<usize>, Vec<Value>, Vec<Site>)>::new();
-    // Visit producers before consumers. Index order misses loads that land in
-    // higher-indexed blocks (for example after `split_irreducible` appends a
-    // copy) when a lower-indexed consumer runs first (VIC-BT-024 / #1249).
-    for b in crate::ir::reverse_postorder(&p.blocks) {
-        let block = &p.blocks[b];
+    for (b, block) in p.blocks.iter().enumerate() {
         t.at.set(Some(b));
         for (i, inst) in block.insts.iter().enumerate() {
             let site = (b, i);
@@ -312,7 +301,6 @@ pub fn track(
                     let address = t
                         .smem_address(inst, base, *offset, soffset)
                         .or_else(|why| t.by_address(why))
-                        .or_else(|why| t.driver_table(inst, base, why))
                         .map_err(fail)?;
                     out.scalar.push((site, address));
                 }
@@ -891,30 +879,6 @@ impl<'a> Tracer<'a> {
         if self.stage == HwStage::Cs && RAW.contains(&why) {
             Ok(Address {
                 param: MEMORY,
-                offset: 0,
-                dynamic: None,
-            })
-        } else {
-            Err(why)
-        }
-    }
-
-    /// A geometry program's load from the driver's table ([`DRIVER`]): its
-    /// address the low dword of user data 0 as it arrives, plus constants.
-    fn driver_table(&self, inst: &Inst, base: &Operand, why: &'static str) -> Result<Address, &'static str> {
-        let Operand::Scalar { code, .. } = *base else {
-            return Err(why);
-        };
-        let lo = inst.read(Reg::S(code)).map(|v| self.sum(self.origin(v)));
-        let user_data_0 = Reg::S(self.stage.user_sgpr(0));
-        let from_table = lo.is_some_and(|s| {
-            s.base.is_none()
-                && s.dynamic
-                    .is_some_and(|v| self.inputs[v.0 as usize] == Some(user_data_0))
-        });
-        if self.stage == HwStage::Gs && inst.name().starts_with("s_load_") && from_table {
-            Ok(Address {
-                param: DRIVER,
                 offset: 0,
                 dynamic: None,
             })
@@ -3880,45 +3844,5 @@ pub(crate) mod tests {
         assert_eq!(table_offset(&r, other), 0x20);
         assert_eq!(r.waterfall.compares.len(), 2);
         assert_eq!(r.waterfall.reads.len(), 4);
-    }
-
-    /// Block 0 jumps to a higher-indexed producer (block 2) that loads the
-    /// buffer descriptor, then back to a lower-indexed consumer (block 1).
-    /// Index order would visit the consumer first and miss the load in
-    /// `out.scalar`; RPO is `[0, 2, 1]` so the descriptor traces to block 2.
-    #[test]
-    fn track_visits_blocks_in_reverse_postorder() {
-        let r = track_words(
-            &[
-                0xBE84_0300, // 0x00: s_mov_b32 s4, s0
-                0xBE85_0380, // 0x04: s_mov_b32 s5, 0
-                0xBF82_0005, // 0x08: s_branch -> 0x20 (block 2)
-                0xF400_0302,
-                0xFA00_0000, // 0x0c (block 1): s_load_dword s12, s[4:5], null
-                0xE030_1000,
-                0x8002_0200, // 0x14: buffer_load_dword v2, v0, s[8:11], 0 offen
-                0xBF81_0000, // 0x1c: s_endpgm
-                0xF408_0202,
-                0xFA00_0000, // 0x20 (block 2): s_load_dwordx4 s[8:11], s[4:5], null
-                0xBF8C_C07F, // 0x28: s_waitcnt lgkmcnt(0)
-                0xBF82_FFF7, // 0x2c: s_branch -> 0x0c (block 1)
-            ],
-            &[param(Table, 0, 1)],
-            HwStage::Cs,
-        );
-        let prod = r.scalar.iter().position(|s| s.0 == (2, 0)).unwrap();
-        let cons = r.scalar.iter().position(|s| s.0 == (1, 0)).unwrap();
-        assert!(
-            prod < cons,
-            "expected block 2 before block 1 in RPO: {:?}",
-            r.scalar
-        );
-        assert_eq!(
-            r.descriptors[0].source,
-            Source::Loaded {
-                load: (2, 0),
-                first: 0,
-            }
-        );
     }
 }

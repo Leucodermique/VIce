@@ -52,10 +52,22 @@ pub const LOADS: u32 = 16;
 /// half has a lane where every lane is in EXEC (`lower.rs`,
 /// `v_readfirstlane_b32`).
 pub const FIRST: u32 = 32;
+/// Not a pass over the module either: the lowering reads the dwords of one
+/// console load (`s_buffer_load_dwordx2` to `x16` from an SRV, a
+/// `global_load_dwordx2` to `x4`) by one call for every four of them, not
+/// by a call each (`lower.rs`, `raw_dwords`). NOT the same result on the card in every case: run 277
+/// had the water black with it (lead: a four-dword load whose last dwords
+/// lie past the view's end, which the card may answer with zeros for the
+/// whole call), so it stays off unless asked for.
+pub const WIDE: u32 = 64;
 /// The passes over the module.
 pub const MODULE: u32 = DEAD | FOLD | REUSE | FACTS | LOADS;
 /// Every pass.
-pub const ALL: u32 = MODULE | FIRST;
+pub const ALL: u32 = MODULE | FIRST | WIDE;
+/// The passes that run when nothing says which: every one but [`WIDE`],
+/// which no card has shown a gain for yet (`VICTORY_SHADER_OPT=127` asks
+/// for it).
+pub const DEFAULT: u32 = ALL & !WIDE;
 
 /// What the instructions a module writes use, of the features a shader
 /// declares by flag (the validator's "flags must match usage").
@@ -67,16 +79,12 @@ pub(crate) struct Usage {
     pub int64: bool,
     /// A typed load of several components from a UAV.
     pub typed_uav_loads: bool,
-    /// A handle annotated as a rasterizer-ordered view.
-    pub rovs: bool,
     /// A handle from the view heap.
     pub heap_views: bool,
     /// A handle from the sampler heap.
     pub heap_samplers: bool,
     /// A 64-bit atomic.
     pub atomic64: bool,
-    /// A 64-bit float, as a result or an operand.
-    pub doubles: bool,
 }
 
 /// What makes two instructions without an effect the same value.
@@ -972,7 +980,6 @@ impl Module {
         let mut u = Usage::default();
         let reached = self.reached();
         let wide = |ty: Ty| self.types[ty.0 as usize] == TypeDef::Int(64);
-        let double = |ty: Ty| self.types[ty.0 as usize] == TypeDef::Double;
         // The first field of a handle's annotation: its kind, with the UAV
         // bit; the second: the component type and count.
         let annotation = |h: V| -> Option<(i64, i64)> {
@@ -1001,11 +1008,7 @@ impl Module {
             for &i in blk.phis.iter().chain(&blk.body) {
                 let inst = &self.insts[i as usize];
                 u.int64 |= wide(inst.ty);
-                u.doubles |= double(inst.ty);
-                for_each_operand(&inst.op, |v| {
-                    u.int64 |= wide(self.type_of(v));
-                    u.doubles |= double(self.type_of(v));
-                });
+                for_each_operand(&inst.op, |v| u.int64 |= wide(self.type_of(v)));
                 let Op::Call(f, args) = &inst.op else {
                     continue;
                 };
@@ -1018,8 +1021,6 @@ impl Module {
                         Some((_, 0)) => u.heap_views = true,
                         _ => u.heap_samplers = true,
                     }
-                } else if name == "annotateHandle" {
-                    u.rovs |= annotation(V::Inst(i)).is_some_and(|(kind, _)| kind & 0x2000 != 0);
                 } else if name.starts_with("atomic") && name.ends_with(".i64") {
                     u.atomic64 = true;
                 } else if name.starts_with("textureLoad") || name.starts_with("bufferLoad") {

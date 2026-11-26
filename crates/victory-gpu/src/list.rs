@@ -114,7 +114,7 @@ struct List {
     /// Ours, after the console layout: memory handed out by
     /// [`allocate_upload`], kept until the list is reset; the host list the
     /// calls record into (decision 0007), and the draw state the title set.
-    uploads: std::sync::Mutex<Uploads>,
+    uploads: std::sync::Mutex<Vec<Vec<u8>>>,
     #[cfg(windows)]
     host: Option<crate::host::HostList>,
     #[cfg(windows)]
@@ -189,7 +189,7 @@ pub(crate) fn host_list<'a>(this: This) -> Option<&'a crate::host::HostList> {
 #[cfg(windows)]
 pub(crate) struct Detached {
     host: crate::host::HostList,
-    _uploads: Uploads,
+    _uploads: Vec<Vec<u8>>,
     _state: crate::draw::State,
 }
 
@@ -197,7 +197,7 @@ pub(crate) struct Detached {
 impl Detached {
     /// A closed list of ours, to run among a title's.
     pub(crate) fn ours(host: crate::host::HostList) -> Self {
-        Detached { host, _uploads: Uploads::default(), _state: Default::default() }
+        Detached { host, _uploads: Vec::new(), _state: Default::default() }
     }
 
     pub(crate) fn host(&self) -> &crate::host::HostList {
@@ -423,7 +423,7 @@ pub(crate) fn detach_parts(lists: &[This]) -> Parts {
                     part.waits,
                     Detached {
                         host: part.host,
-                        _uploads: Uploads::default(),
+                        _uploads: Vec::new(),
                         _state: Default::default(),
                     },
                 )
@@ -637,15 +637,6 @@ extern "system" fn close(this: This) -> HRESULT {
     S_OK
 }
 extern "system" fn reset(this: This, allocator: This, pipeline: This) -> HRESULT {
-    #[cfg(windows)]
-    {
-        thread_local! {
-            static PINNED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-        }
-        if !PINNED.replace(true) {
-            crate::framelog::keep_on_fast_cores("title-record");
-        }
-    }
     if allocator.is_null() {
         return E_INVALIDARG;
     }
@@ -657,7 +648,7 @@ extern "system" fn reset(this: This, allocator: This, pipeline: This) -> HRESULT
     // Every submission of the list has run (submissions are waited for).
     // SAFETY: the title passes one of our lists.
     let uploads = unsafe { &(*this.cast::<List>()).uploads };
-    *uploads.lock().unwrap_or_else(|e| e.into_inner()) = Uploads::default();
+    uploads.lock().unwrap_or_else(|e| e.into_inner()).clear();
     // The parts of a recording that was cut and never submitted go with it
     // (a submission takes the parts it runs).
     #[cfg(windows)]
@@ -796,46 +787,6 @@ extern "system" fn barrier(this: This, count: u32, barriers: *const Barrier) -> 
     0
 }
 
-/// Stands in for the console upscaler's dispatch on title list `this`:
-/// `output` gets the stretched top-left `render` texels of `colour`
-/// ([`crate::over`]). False if nothing was recorded (no host GPU, textures
-/// we do not hold, an output shaders cannot write).
-///
-/// The real dispatch leaves its own state in the list, so the title sets
-/// its own again afterwards; ours is replayed all the same.
-#[cfg(windows)]
-pub fn upscale_stretch(
-    this: *const std::ffi::c_void,
-    colour: *const std::ffi::c_void,
-    output: *const std::ffi::c_void,
-    render: [u32; 2],
-) -> bool {
-    const SHADER_READ: u32 = 0x40;
-    const UNORDERED: u32 = 0x8;
-    let (this, colour, output): (This, This, This) = (this.cast(), colour.cast(), output.cast());
-    if this.is_null() || colour.is_null() || output.is_null() {
-        return false;
-    }
-    let mut done = false;
-    with_state(this, |list, state| {
-        let (Some(to), Some(from), Some(host)) = (
-            crate::resource::host_resource(output),
-            crate::resource::host_resource(colour),
-            crate::host::host(),
-        ) else {
-            return;
-        };
-        ensure_state(list, colour, SHADER_READ);
-        ensure_state(list, output, UNORDERED);
-        done = crate::over::record_stretch(&host.device, &list.list, to, from, render);
-        if done {
-            crate::texture::host_written(output);
-        }
-        state.replay(list);
-    });
-    done
-}
-
 /// Moves a title texture's host copy to `state` in the list, if needed.
 #[cfg(windows)]
 pub(crate) fn ensure_state(list: &crate::host::HostList, resource: This, state: u32) {
@@ -880,24 +831,6 @@ extern "system" fn copy_buffer_region(
         && let Some(to) = buffer_range(dst, dst_offset, len)
         && let Some(from) = buffer_range(src, src_offset, len)
     {
-        // A source the list's shaders write, in a list whose shaders store
-        // through addresses (the structure builder's): on the card, behind
-        // them (`HostList::copy_on_card`); at submission it would take what
-        // the source held before they ran. Only there: moving every title
-        // copy to the card cost 205 -> 232 ms a frame, its destinations
-        // being small constant buffers the CPU then waited for (README).
-        // `VICTORY_CARD_TITLE_COPIES=0`: always at submission, as before.
-        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        let on = *ON.get_or_init(|| std::env::var_os("VICTORY_CARD_TITLE_COPIES").is_none_or(|v| v != "0"));
-        if on
-            && list.asked(crate::memory::STORES)
-            && list.shaders_wrote(from as usize, len as usize)
-            && list.copy_on_card(to as u64, from as u64, len)
-        {
-            #[cfg(feature = "diagnostics")]
-            crate::bvhtrace::line(|| format!("G {:#x}+{len:#x} from {:#x}", to as usize, from as usize));
-            return;
-        }
         list.defer_copy(to, from, len as usize);
     }
     #[cfg(not(windows))]
@@ -908,19 +841,7 @@ extern "system" fn copy_buffer_region(
 /// other is not ([`crate::resource::target_format`]): their texels differ
 /// in size, so the host cannot copy between them (logged once).
 #[cfg(windows)]
-fn unlike(dst: This, src: This, mapped: bool) -> bool {
-    // A host copy without its largest levels has other subresources and
-    // sizes than the title's texture (`crate::resource::drop_levels`). A
-    // caller that maps subresources (`mapped`) copies level by level to the
-    // levels the host has (`crate::resource::host_subresource`); any other
-    // copy with such a texture is skipped.
-    if !mapped && (crate::resource::dropped(src) > 0 || crate::resource::dropped(dst) > 0) {
-        static ONCE: std::sync::Once = std::sync::Once::new();
-        ONCE.call_once(|| {
-            tracing::warn!(?dst, ?src, "copy with a texture whose host copy leaves out levels skipped")
-        });
-        return true;
-    }
+fn unlike(dst: This, src: This) -> bool {
     let unlike = crate::resource::stands_in(dst) != crate::resource::stands_in(src);
     if unlike {
         static ONCE: std::sync::Once = std::sync::Once::new();
@@ -942,14 +863,13 @@ extern "system" fn copy_resource(this: This, dst: This, src: This) {
         let Some(list) = host_list(this) else {
             return;
         };
+        // A copy on the card may write a buffer: no indirect draw after it joins a window before it.
+        crate::indirect::end_window(list);
         if let (Some(to), Some(from)) = (
             crate::resource::host_resource(dst),
             crate::resource::host_resource(src),
         ) {
-            // Host copies that leave out different numbers of levels differ
-            // in shape: copied level by level below.
-            let levelwise = crate::resource::dropped(dst) != crate::resource::dropped(src);
-            if unlike(dst, src, true) {
+            if unlike(dst, src) {
                 return;
             }
             // Two title textures over the same memory have one host
@@ -991,12 +911,8 @@ extern "system" fn copy_resource(this: This, dst: This, src: This) {
             ensure_state(list, src, COPY_SOURCE);
             #[cfg(feature = "diagnostics")]
             list.note_op(|| format!("copy resource {src:?} to {dst:?}"));
-            if levelwise {
-                copy_levels(list, dst, to, src, from);
-            } else {
-                // SAFETY: an open list and live textures.
-                unsafe { list.list.CopyResource(to, from) };
-            }
+            // SAFETY: an open list and live textures.
+            unsafe { list.list.CopyResource(to, from) };
         } else if let (Some((to, a)), Some((from, b))) = (
             crate::resource::buffer_bytes(dst),
             crate::resource::buffer_bytes(src),
@@ -1006,42 +922,6 @@ extern "system" fn copy_resource(this: This, dst: This, src: This) {
     }
     #[cfg(not(windows))]
     let _ = (this, dst, src);
-}
-
-/// A whole-texture copy between host copies that leave out different
-/// numbers of levels (`crate::resource::drop_levels`): each title level both
-/// host copies have, at its own index in each. A title level has the same
-/// size in every host copy that has it.
-#[cfg(windows)]
-fn copy_levels(
-    list: &crate::host::HostList,
-    dst: This,
-    to: &windows::Win32::Graphics::Direct3D12::ID3D12Resource,
-    src: This,
-    from: &windows::Win32::Graphics::Direct3D12::ID3D12Resource,
-) {
-    use windows::Win32::Graphics::Direct3D12::{
-        D3D12_TEXTURE_COPY_LOCATION, D3D12_TEXTURE_COPY_LOCATION_0, D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
-        ID3D12Resource,
-    };
-    let location = |texture: &ID3D12Resource, index: u32| D3D12_TEXTURE_COPY_LOCATION {
-        // SAFETY: a borrowed pointer the location never releases.
-        pResource: unsafe { std::mem::transmute_copy(texture) },
-        Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
-        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 { SubresourceIndex: index },
-    };
-    let count = crate::resource::title_subresources(dst).min(crate::resource::title_subresources(src));
-    for index in 0..count {
-        let (Some(d), Some(s)) = (
-            crate::resource::host_subresource(dst, index),
-            crate::resource::host_subresource(src, index),
-        ) else {
-            continue;
-        };
-        // SAFETY: an open list and live textures; both subresources exist
-        // and have the title level's size.
-        unsafe { list.list.CopyTextureRegion(&location(to, d), 0, 0, 0, &location(from, s), None) };
-    }
 }
 
 extern "system" fn copy_resource_x(this: This, dst: This, src: This, _flags: u32) {
@@ -1083,6 +963,9 @@ extern "system" fn copy_texture_region(
         else {
             return;
         };
+        // A copy on the card (textures, or texels read back into a buffer of ours): no indirect draw after it joins
+        // a window before it (conservative: none of these writes an argument buffer).
+        crate::indirect::end_window(list);
         let Some(to) = crate::resource::host_resource(dst.resource) else {
             // Texture to buffer: a read back. The list copies the texels
             // into a host buffer of ours; once it has run they go to the
@@ -1117,19 +1000,8 @@ extern "system" fn copy_texture_region(
             }
             return;
         };
-        // Both locations are mapped to the levels their host copies have
-        // (below), so copies with textures that leave out levels go ahead.
-        if unlike(dst.resource, src.resource, true) {
+        if unlike(dst.resource, src.resource) {
             return;
-        }
-        // Into a host copy without its largest levels: the level it has,
-        // or nothing (`crate::resource::drop_levels`).
-        let mut dst = dst;
-        if dst.kind != FOOTPRINT && crate::resource::dropped(dst.resource) > 0 {
-            match crate::resource::host_subresource(dst.resource, dst.footprint.offset as u32) {
-                Some(index) => dst.footprint.offset = u64::from(index),
-                None => return,
-            }
         }
         let mut from = src;
         // Both sides are the same subresource of one host texture (set below).
@@ -1162,14 +1034,6 @@ extern "system" fn copy_texture_region(
             let Some(texture) = crate::resource::host_resource(src.resource) else {
                 return;
             };
-            // From a host copy without its largest levels: the level it
-            // has (the same size as the title's), or nothing.
-            if crate::resource::dropped(src.resource) > 0 {
-                match crate::resource::host_subresource(src.resource, src.footprint.offset as u32) {
-                    Some(index) => from.footprint.offset = u64::from(index),
-                    None => return,
-                }
-            }
             // The same subresource of one host texture on both sides (two
             // title textures over one memory): not a copy the host allows.
             // The states and the copy are left out below; the rest is
@@ -1177,7 +1041,7 @@ extern "system" fn copy_texture_region(
             same = texture.as_raw() == to.as_raw()
                 && src.kind != FOOTPRINT
                 && dst.kind != FOOTPRINT
-                && from.footprint.offset as u32 == dst.footprint.offset as u32;
+                && src.footprint.offset as u32 == dst.footprint.offset as u32;
             list.twin_use(src.resource, false, false);
             if crate::texture::title_written(texture) {
                 crate::texture::upload(list, src.resource, texture);
@@ -1276,7 +1140,6 @@ fn read_back(
     // The title's buffer holds every row at its own pitch.
     let bytes = pitch * (rows - 1) + row;
     let data = buffer_range(dst.resource, dst.footprint.offset, bytes).ok_or("a destination outside its buffer")?;
-    let index = crate::resource::readback_subresource(src.resource, src.footprint.offset as u32)?;
     let texture = crate::resource::host_resource(src.resource).ok_or("no host texture")?;
     let buffer = host.read_back_buffer(size).ok_or("no read-back buffer")?;
     // As a texture source of any copy: what shaders wrote to a depth twin
@@ -1288,7 +1151,6 @@ fn read_back(
     ensure_state(list, src.resource, COPY_SOURCE);
     let mut from = src;
     from.resource = texture.as_raw().cast_const().cast();
-    from.footprint.offset = u64::from(index);
     let mut to = dst;
     to.resource = buffer.as_raw().cast_const().cast();
     to.footprint = footprint;
@@ -1348,7 +1210,7 @@ extern "system" fn resolve(
         use windows::core::Interface;
         const RESOLVE_DEST: u32 = 0x1000;
         const RESOLVE_SOURCE: u32 = 0x2000;
-        if unlike(dst, src, false) {
+        if unlike(dst, src) {
             return;
         }
         // Depth textures shaders also write: what they wrote, first.
@@ -1504,13 +1366,9 @@ extern "system" fn copy_memory(this: This, dst: u64, src: u64, len: u64, _flags:
         && src != 0
     {
         let len = len as usize;
-        #[cfg(feature = "diagnostics")]
-        crate::bvhtrace::line(|| format!("X recorded {dst:#x}+{len:#x} from {src:#x}"));
-        list.defer(move || {
-            #[cfg(feature = "diagnostics")]
-            crate::bvhtrace::line(|| {
-                format!("X {dst:#x}+{len:#x} from {src:#x} [{}]", crate::bvhtrace::peek(src, len.min(32)))
-            });
+        // Its place is known: `VICTORY_NEAR_WRITES` uses it (without the
+        // switch the step is the same as `defer`'s).
+        list.defer_at(dst as usize, len, move || {
             if crate::texture::committed(src as *const u8, len)
                 && crate::texture::committed(dst as *const u8, len)
             {
@@ -1528,18 +1386,13 @@ extern "system" fn driver_hint(_: This, _feature: u64, _value: u64) -> u64 {
     0
 }
 
-/// `DispatchX(x, y, z, flags)`: a dispatch with the console's dispatch
-/// initiator bits (`COMPUTE_DISPATCH_INITIATOR`). The ray-tracing structure
-/// builder dispatches this way, its rehydration of pre-built structures with
-/// [`THREAD_DIMENSIONS`]; the wave32 bit (0x8000) and the others mean nothing
-/// to the host.
+/// `DispatchX(x, y, z, flags)`: a dispatch with the console's
+/// `COMPUTE_DISPATCH_INITIATOR` flags. Bit 5 (0x20,
+/// `USE_THREAD_DIMENSIONS`): `x`, `y`, `z` count threads, not groups (the
+/// ray-tracing structure builder's box stages; fork pull request #646).
 extern "system" fn dispatch_x(this: This, x: u32, y: u32, z: u32, flags: u32) {
     #[cfg(windows)]
-    if flags & THREAD_DIMENSIONS != 0 {
-        state::dispatch_threads(this, x, y, z);
-    } else {
-        state::dispatch(this, x, y, z);
-    }
+    state::dispatch_x(this, x, y, z, flags);
     #[cfg(not(windows))]
     {
         let _ = (this, x, y, z, flags);
@@ -1547,19 +1400,26 @@ extern "system" fn dispatch_x(this: This, x: u32, y: u32, z: u32, flags: u32) {
     }
 }
 
-/// The dispatch initiator's `USE_THREAD_DIMENSIONS`: `x`, `y` and `z` count
-/// threads, not groups. The last group along a dimension is cut short and
-/// no thread past the count is launched. Taken for group counts, the
-/// builder's box rehydration (one node per thread, group `g` writing its 64
-/// nodes at `g` times 8 KiB) ran 64 times its groups and wrote megabytes of
-/// empty nodes past each structure it rebuilt in place, over the title's
-/// objects that share those pages (run rt-int1: the title died one frame
-/// later on child pointers of all ones and infinite bounds).
-const THREAD_DIMENSIONS: u32 = 0x20;
+/// `BeginQuery(heap, type, index)`: counted; an occlusion query runs on the host GPU with `VICTORY_OCCLUSION`.
+extern "system" fn begin_query(this: This, heap: This, kind: u32, index: u32) {
+    crate::query::counted(kind);
+    #[cfg(windows)]
+    if let Some(list) = host_list(this) {
+        crate::query::begin(list, heap, kind, index);
+    }
+    #[cfg(not(windows))]
+    let _ = (this, heap, index);
+}
 
-/// `BeginQuery`/`EndQuery(heap, type, index)`: queries are answered when
-/// resolved.
-extern "system" fn query_mark(_: This, _heap: This, _kind: u32, _index: u32) {}
+/// `EndQuery(heap, type, index)`: ends what [`begin_query`] began on the host.
+extern "system" fn end_query(this: This, heap: This, kind: u32, index: u32) {
+    #[cfg(windows)]
+    if let Some(list) = host_list(this) {
+        crate::query::end(list, heap, kind, index);
+    }
+    #[cfg(not(windows))]
+    let _ = (this, heap, kind, index);
+}
 
 /// `ResolveQueryData(heap, type, first, count, buffer, offset)`: writes
 /// each query's result into the buffer once the list has run. Timestamps
@@ -1570,9 +1430,9 @@ extern "system" fn query_mark(_: This, _heap: This, _kind: u32, _index: u32) {}
 /// not measured ones (time spans come out as the submission's length).
 extern "system" fn resolve_queries(
     this: This,
-    _heap: This,
+    heap: This,
     kind: u32,
-    _first: u32,
+    first: u32,
     count: u32,
     buffer: This,
     offset: u64,
@@ -1594,6 +1454,17 @@ extern "system" fn resolve_queries(
     if offset + u64::from(count) * bytes > size {
         return;
     }
+    // With `VICTORY_OCCLUSION`: occlusion results from the host GPU, if every query of the range ran there.
+    #[cfg(windows)]
+    if (kind == OCCLUSION || kind == BINARY)
+        && let Some(list) = host_list(this)
+        // SAFETY: inside the buffer, checked above.
+        && crate::query::resolve(list, heap, kind, first, count, unsafe { data.add(offset as usize) } as u64)
+    {
+        return;
+    }
+    #[cfg(not(windows))]
+    let _ = (heap, first);
     for i in 0..u64::from(count) {
         // Wider results are written as 8-byte pieces.
         for piece in 0..bytes / 8 {
@@ -1643,252 +1514,21 @@ extern "system" fn reset_x(this: This, allocator: This, pipeline: This, _flags: 
 /// `E_NOTIMPL` as a pointer).
 extern "system" fn allocate_upload(this: This, size: u64, alignment: u64) -> *mut u8 {
     let align = usize::try_from(alignment).unwrap_or(0).max(16);
-    let Some((size, len)) = usize::try_from(size)
-        .ok()
-        .and_then(|s| Some((s, s.checked_add(align)?)))
-    else {
+    let Some(len) = usize::try_from(size).ok().and_then(|s| s.checked_add(align)) else {
         return std::ptr::null_mut();
     };
     if this.is_null() || !align.is_power_of_two() {
         return std::ptr::null_mut();
     }
-    // SAFETY: the title passes one of our lists.
-    let uploads = unsafe { &(*this.cast::<List>()).uploads };
-    let mut uploads = uploads.lock().unwrap_or_else(|e| e.into_inner());
-    #[cfg(windows)]
-    if let Some(at) = uploads.carve(size, align) {
-        // Zeros, as the heap blocks below are (a chunk comes back with
-        // what its last list left in it).
-        // SAFETY: the bytes just carved out of a committed chunk the list
-        // holds.
-        unsafe { at.write_bytes(0, size) };
-        return at;
-    }
-    let _ = size;
     let mut block = vec![0u8; len];
     let start = block.as_mut_ptr();
     // SAFETY: the offset is below `align`, so `size` bytes fit after it.
     let at = unsafe { start.add(start.align_offset(align)) };
+    // SAFETY: the title passes one of our lists.
+    let uploads = unsafe { &(*this.cast::<List>()).uploads };
     // Moving the vector keeps its heap block where it is.
-    uploads.heap.push(block);
+    uploads.lock().unwrap_or_else(|e| e.into_inner()).push(block);
     at
-}
-
-/// What [`allocate_upload`] handed out to a list, kept until the list is
-/// reset or, once submitted, until the submission has run.
-#[derive(Default)]
-pub(crate) struct Uploads {
-    /// Chunks of upload memory shaders reach by address ([`upload`]), the
-    /// last one being carved, and the bytes of it handed out.
-    #[cfg(windows)]
-    chunks: Vec<upload::Chunk>,
-    #[cfg(windows)]
-    used: usize,
-    /// Blocks of the process heap: requests larger than a chunk, or all of
-    /// them when no chunk can be had.
-    heap: Vec<Vec<u8>>,
-}
-
-impl Uploads {
-    /// `size` bytes at a multiple of `align` (a power of two) from the
-    /// list's last chunk, or from a new one.
-    #[cfg(windows)]
-    fn carve(&mut self, size: usize, align: usize) -> Option<*mut u8> {
-        if size > upload::CHUNK || align > upload::CHUNK {
-            return None;
-        }
-        let fits = |used: usize| used.next_multiple_of(align) + size <= upload::CHUNK;
-        if self.chunks.is_empty() || !fits(self.used) {
-            self.chunks.push(upload::Chunk::take()?);
-            self.used = 0;
-        }
-        let offset = self.used.next_multiple_of(align);
-        self.used = offset + size;
-        // (Chunks start at multiples of their size, so of `align`.)
-        let at = self.chunks.last()?.at() + offset;
-        upload::handed(at + size);
-        Some(at as *mut u8)
-    }
-
-    #[cfg(test)]
-    fn is_empty(&self) -> bool {
-        #[cfg(windows)]
-        if !self.chunks.is_empty() {
-            return false;
-        }
-        self.heap.is_empty()
-    }
-}
-
-/// List upload memory ([`allocate_upload`]) that shaders reach by address.
-///
-/// The title's ray-tracing structure builder (`XboxBvhBuilder.dll`) writes
-/// what its stages read into list upload memory and hands the stages its
-/// addresses: its header stage (InitHeaders) gets the address of its
-/// 40-byte records as a root view and reads them through a buffer
-/// descriptor it makes of that address, that is by address. Blocks of the
-/// process heap, which the layer gave out before, lie at 1.5-1.8 TiB (runs
-/// rt-trace5, rt-dry1), beyond the console's 40 bits and the directory of
-/// title memory by address (`memory.rs`, below 128 GiB): the records read
-/// as zeros, so the stage stored its headers at address 0, which drops
-/// them. So the memory comes from 4 MiB chunks of one reservation where the
-/// title's GPU memory lies (from 4 GiB, below 128 GiB), write-watched as
-/// XMem makes the title's: each chunk is one window of memory outside
-/// buffers (`shadow.rs`), whose pages the CPU wrote are copied when a list
-/// that names it is submitted (run rt-trace7: the records at 66 GiB).
-#[cfg(windows)]
-pub(crate) mod upload {
-    use std::sync::Mutex;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    use windows_sys::Win32::System::Memory::{
-        MEM_ADDRESS_REQUIREMENTS, MEM_COMMIT, MEM_EXTENDED_PARAMETER, MEM_RESERVE,
-        MemExtendedParameterAddressRequirements, PAGE_NOACCESS, PAGE_READWRITE, VirtualAlloc,
-        VirtualAlloc2,
-    };
-    use windows_sys::Win32::System::Threading::GetCurrentProcess;
-
-    /// A chunk: one window of memory outside buffers (`shadow.rs`).
-    pub(crate) const CHUNK: usize = 4 << 20;
-    /// Chunks reserved (512 MiB).
-    const CHUNKS: usize = 128;
-    /// The host's write watching (not in windows-sys' memory module).
-    const MEM_WRITE_WATCH: u32 = 0x20_0000;
-
-    struct Region {
-        /// The reservation's start; 0 if it could not be made.
-        base: usize,
-        /// Chunks committed so far, from the start.
-        next: usize,
-        /// Committed chunks no list holds.
-        free: Vec<usize>,
-    }
-
-    static REGION: Mutex<Option<Region>> = Mutex::new(None);
-
-    /// A chunk a list holds; it goes back to the free ones when dropped.
-    pub(crate) struct Chunk(usize);
-
-    impl Chunk {
-        /// A free chunk, or a new one; none when all are held (the heap
-        /// serves then, out of shaders' reach).
-        pub(crate) fn take() -> Option<Chunk> {
-            let mut region = REGION.lock().unwrap_or_else(|e| e.into_inner());
-            let r = region.get_or_insert_with(|| {
-                let base = reserve().unwrap_or(0);
-                BASE.store(base, Ordering::Relaxed);
-                Region {
-                    base,
-                    next: 0,
-                    free: Vec::new(),
-                }
-            });
-            if r.base == 0 {
-                return None;
-            }
-            if let Some(at) = r.free.pop() {
-                return Some(Chunk(at));
-            }
-            if r.next == CHUNKS {
-                static ONCE: std::sync::Once = std::sync::Once::new();
-                ONCE.call_once(|| {
-                    tracing::warn!(
-                        chunks = CHUNKS,
-                        "list upload memory: every chunk is held; more comes from the heap, which shaders cannot reach by address"
-                    );
-                });
-                return None;
-            }
-            let at = r.base + r.next * CHUNK;
-            // SAFETY: a chunk of our reservation.
-            if unsafe { VirtualAlloc(at as *const _, CHUNK, MEM_COMMIT, PAGE_READWRITE) }.is_null() {
-                return None;
-            }
-            r.next += 1;
-            Some(Chunk(at))
-        }
-
-        pub(crate) fn at(&self) -> usize {
-            self.0
-        }
-    }
-
-    impl Drop for Chunk {
-        fn drop(&mut self) {
-            if let Some(i) = place(self.0) {
-                USED[i].store(0, Ordering::Relaxed);
-            }
-            if let Some(r) = REGION.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
-                r.free.push(self.0);
-            }
-        }
-    }
-
-    /// The reservation's start, once made (0 before).
-    static BASE: AtomicUsize = AtomicUsize::new(0);
-    /// Per chunk, by its place in the reservation: the bytes from its start
-    /// handed out so far by the list that holds it.
-    static USED: [AtomicUsize; CHUNKS] = [const { AtomicUsize::new(0) }; CHUNKS];
-
-    /// The place of the chunk holding `address` in the reservation.
-    fn place(address: usize) -> Option<usize> {
-        let base = BASE.load(Ordering::Relaxed);
-        let i = address.checked_sub(base)? / CHUNK;
-        (base != 0 && i < CHUNKS).then_some(i)
-    }
-
-    /// Bytes up to `end` of a chunk were handed out.
-    pub(crate) fn handed(end: usize) {
-        if let Some(i) = place(end.saturating_sub(1)) {
-            USED[i].fetch_max(end - (BASE.load(Ordering::Relaxed) + i * CHUNK), Ordering::Relaxed);
-        }
-    }
-
-    /// Where what was handed out of the chunk holding `address` ends, if
-    /// `address` lies in it: a bound for the block a root view points into
-    /// (the blocks after it in the chunk are the same list's).
-    pub(crate) fn handed_end(address: u64) -> Option<u64> {
-        let address = usize::try_from(address).ok()?;
-        let i = place(address)?;
-        let end = BASE.load(Ordering::Relaxed) + i * CHUNK + USED[i].load(Ordering::Relaxed);
-        (address < end).then_some(end as u64)
-    }
-
-    /// The chunks committed so far, held or free: start and bytes.
-    pub(crate) fn span() -> Option<(u64, u64)> {
-        let region = REGION.lock().unwrap_or_else(|e| e.into_inner());
-        let r = region.as_ref()?;
-        (r.base != 0 && r.next > 0).then(|| (r.base as u64, (r.next * CHUNK) as u64))
-    }
-
-    fn reserve() -> Option<usize> {
-        let mut requirements = MEM_ADDRESS_REQUIREMENTS {
-            LowestStartingAddress: (1usize << 32) as *mut _,
-            HighestEndingAddress: (((victory_shader::emit::MEMORY_PAGES as usize) << 16) - 1) as *mut _,
-            Alignment: CHUNK,
-        };
-        let mut parameter = MEM_EXTENDED_PARAMETER::default();
-        parameter.Anonymous1._bitfield = MemExtendedParameterAddressRequirements as u64;
-        parameter.Anonymous2.Pointer = (&raw mut requirements).cast();
-        // SAFETY: a reservation of our own; the parameter and the
-        // requirements it points at outlive the call.
-        let at = unsafe {
-            VirtualAlloc2(
-                GetCurrentProcess(),
-                std::ptr::null(),
-                CHUNKS * CHUNK,
-                MEM_RESERVE | MEM_WRITE_WATCH,
-                PAGE_NOACCESS,
-                &mut parameter,
-                1,
-            )
-        };
-        if at.is_null() {
-            tracing::warn!("list upload memory: no room below 128 GiB; it comes from the heap, which shaders cannot reach by address");
-            return None;
-        }
-        Some(at as usize)
-    }
 }
 
 /// Draw state the host has no use for (root signatures: ours come with
@@ -2044,10 +1684,9 @@ mod state {
         super::count_dispatch();
         with_state(this, |list, s| s.dispatch(list, x, y, z));
     }
-    /// A dispatch of `x` by `y` by `z` threads ([`super::THREAD_DIMENSIONS`]).
-    pub(super) fn dispatch_threads(this: This, x: u32, y: u32, z: u32) {
+    pub(super) fn dispatch_x(this: This, x: u32, y: u32, z: u32, flags: u32) {
         super::count_dispatch();
-        with_state(this, |list, s| s.dispatch_threads(list, [x, y, z]));
+        with_state(this, |list, s| s.dispatch_x(list, x, y, z, flags));
     }
     /// `DispatchMesh(x, y, z)` (the PC method of List6); the title's mesh
     /// programs take `x` groups only.
@@ -2571,8 +2210,8 @@ const METHODS: [(usize, *const ()); 52] = [
 ];
 /// The rest of [`METHODS`], kept apart only to stay readable.
 const MORE_METHODS: [(usize, *const ()); 9] = [
-    (28, query_mark as *const ()),             // 0xe0 BeginQuery
-    (29, query_mark as *const ()),             // 0xe8 EndQuery
+    (28, begin_query as *const ()),            // 0xe0 BeginQuery
+    (29, end_query as *const ()),              // 0xe8 EndQuery
     (30, resolve_queries as *const ()),        // 0xf0
     (78, dispatch_x as *const ()),             // 0x270
     (98, state::dispatch_mesh_x as *const ()), // 0x310
@@ -2670,19 +2309,6 @@ mod tests {
         // SAFETY: 40 bytes were handed out.
         unsafe { p.write_bytes(0xab, 40) };
         assert!(allocate_upload(list, 8, 0x30).is_null(), "not a power of two");
-        // Where shaders reach title memory by address; more than a chunk
-        // comes from the heap.
-        #[cfg(windows)]
-        {
-            assert!((1 << 32..(victory_shader::emit::MEMORY_PAGES as usize) << 16).contains(&(p as usize)));
-            let q = allocate_upload(list, 24, 16);
-            assert_eq!(q as usize, p as usize + 48, "carved from the same chunk");
-            // (how far the chunk was handed out, which bounds the block a root view points
-            // into when the title addresses in it are looked for: `crate::memory`)
-            assert_eq!(upload::handed_end(p as u64 + 8), Some(q as u64 + 24));
-            assert_eq!(upload::handed_end(q as u64 + 24), None, "past what was handed out");
-            assert!(!allocate_upload(list, 8 << 20, 16).is_null());
-        }
         assert_eq!(reset(list, allocator, null), S_OK);
         // SAFETY: the list is ours.
         assert!(unsafe { &(*list.cast::<List>()).uploads }.lock().unwrap().is_empty());

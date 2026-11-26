@@ -30,7 +30,6 @@ enum TypeDef {
     Void,
     Int(u32),
     Float,
-    /// A 64-bit float.
     Double,
     /// Pointee and address space.
     Ptr(Ty, u32),
@@ -109,7 +108,6 @@ pub(crate) enum Cast {
     FpToSi = 4,
     UiToFp = 5,
     SiToFp = 6,
-    FpExt = 8,
     Bitcast = 11,
 }
 
@@ -328,26 +326,11 @@ impl Module {
         }
     }
 
-    /// `x` where `v` is the integer negation `0 - x` of a value `x` that is no constant.
-    pub fn negation_of(&self, v: V) -> Option<V> {
-        let V::Inst(i) = v else { return None };
-        match self.insts[i as usize].op {
-            Op::Bin(Bin::Sub, a, x) if self.int_value(a) == Some(0) && !matches!(x, V::Const(_)) => Some(x),
-            _ => None,
-        }
-    }
-
     /// Gives constant `old` the content of `new` (both stay valid).
     pub fn replace_const(&mut self, old: V, new: V) {
         if let (V::Const(o), V::Const(n)) = (old, new) {
             self.consts[o as usize] = self.consts[n as usize].clone();
         }
-    }
-
-    /// Function names declared in this module (test inspection).
-    #[cfg(test)]
-    pub fn func_names(&self) -> Vec<String> {
-        self.funcs.iter().map(|f| f.name.clone()).collect()
     }
 
     /// A function declaration (or `main` with `body`), found by name.
