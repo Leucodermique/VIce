@@ -2496,7 +2496,9 @@ impl<'a> Lower<'a> {
                     // nobody wrote, and VGPRs nobody set read as zero.
                     None if n >= crate::ir::PARKED => Val::I32(self.s.m.i32(0)),
                     // No wave overlaps this one (see `ordered_section`).
-                    None if self.pops_collision(v) => Val::I32(self.s.m.i32(0)),
+                    // Seed POPS collision id with wave_id=1 != collision_id=0 (origin #2395)
+                    // so inactive lanes never spin 2^20 iterations in the POPS wait loop.
+                    None if self.pops_collision(v) => Val::I32(self.s.m.i32(1 << 16)),
                     None => Val::Missing("a hardware SGPR input"),
                 },
                 Reg::Scc => Val::Missing("SCC on entry"),

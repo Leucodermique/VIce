@@ -608,7 +608,7 @@ def launch_game(cfg, developer):
         # - VICTORY_AMBIENT=0.45 / AIR=0.55 / MOST=1.35: lights dark rooms cleanly while cutting the sunset
         #   orange veil that washed out Lucia's hair/face near the prison window.
         # - Series S 720p -> 1080p (VICTORY_RENDER_SCALE=0.667) + VICTORY_OWN_UPSCALER=1 + VICTORY_COMPOSE=1.
-        env["VICTORY_TEXTURE_NO_WAIT"] = "0"
+        env["VICTORY_TEXTURE_NO_WAIT"] = "1"
         env["VICTORY_RELAY"] = "2"
         env["VICTORY_CARD_STEPS"] = "2"
         env["VICTORY_WIDE_BACK"] = "1"
@@ -655,7 +655,7 @@ def launch_game(cfg, developer):
         env["VICTORY_NO_WATCHDOG"] = "1"
     else:
         # Conservative Quality mode (RELAY=1, CARD_STEPS=0: slower ~7-10 FPS, zero mesh jitter)
-        env["VICTORY_TEXTURE_NO_WAIT"] = "0"
+        env["VICTORY_TEXTURE_NO_WAIT"] = "1"
         env["VICTORY_RELAY"] = "1"
         env["VICTORY_CARD_STEPS"] = "0"
         env["VICTORY_WIDE_BACK"] = "1"
