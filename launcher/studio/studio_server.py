@@ -259,21 +259,21 @@ def _sync_smooth_motion_exe(src: Path) -> Path:
         return src
 
 
-def resolve_engine(version):
+def resolve_engine(version, smooth_motion=True):
     diag_exe = ENGINE / "target" / "diag" / "victory.exe"
     release_exe = ENGINE / "target" / "release" / "victory.exe"
     debug_exe = ENGINE / "target" / "debug" / "victory.exe"
+    pick = lambda p: _sync_smooth_motion_exe(p) if smooth_motion else p
     if not version or version == "victory.exe":
         # VIctory-NVIDIA needs the diag build (release + Thin LTO + diagnostics) so
-        # VICTORY_SKIP_PIPELINES (scripts/rt_off_hashes.txt) is active, copied as
-        # victory_sm.exe so NVIDIA App Smooth Motion applies automatically.
+        # VICTORY_SKIP_PIPELINES (scripts/rt_off_hashes.txt) is active.
         if diag_exe.is_file():
-            return _sync_smooth_motion_exe(diag_exe)
+            return pick(diag_exe)
         if release_exe.is_file():
-            return _sync_smooth_motion_exe(release_exe)
+            return pick(release_exe)
         return debug_exe
     if version == "victory-diag.exe":
-        return _sync_smooth_motion_exe(diag_exe) if diag_exe.is_file() else diag_exe
+        return pick(diag_exe) if diag_exe.is_file() else diag_exe
     if version == "victory-debug.exe":
         return debug_exe
     return ENGINE / "launcher" / "versions" / Path(version).name
@@ -562,14 +562,26 @@ def launch_game(cfg, developer):
     version = cfg.get("version", "victory.exe")
     if not developer:
         version = "victory.exe"
-    engine = resolve_engine(version)
+    smooth_motion = bool(cfg.get("smoothMotion", True))
+    engine = resolve_engine(version, smooth_motion=smooth_motion)
     if not engine.is_file():
         raise ValueError(f"Exécutable moteur introuvable : {engine.name}")
     title = resolve_title()
     if title is None or not title.is_file():
         raise ValueError("Jeu introuvable (game_scarlett_master.exe).")
 
-    console = cfg.get("console", "series-s") if developer else "series-s"
+    res_preset = str(cfg.get("resolution", "")).strip().lower()
+    if res_preset == "4k":
+        console, render_scale = "series-x", "0.5"
+    elif res_preset == "1080p-hq":
+        console, render_scale = "series-s", "0.667"
+    elif res_preset == "720p":
+        console, render_scale = "series-s", "0.5"
+    elif res_preset == "1080p":
+        console, render_scale = "series-s", "0.583"
+    else:
+        console = cfg.get("console", "series-s")
+        render_scale = "0.5" if console == "series-x" else "0.583"
     if console not in ("series-x", "series-s"):
         raise ValueError("Profil console invalide.")
 
@@ -624,7 +636,7 @@ def launch_game(cfg, developer):
         env["VICTORY_LAND_THREADS"] = "10"
         env["VICTORY_LAND_SKIP"] = "1"
         env["VICTORY_DYNAMIC_SLOTS"] = "524288"
-        env["VICTORY_RENDER_SCALE"] = "0.583"
+        env["VICTORY_RENDER_SCALE"] = render_scale
         env["VICTORY_OWN_UPSCALER"] = "1"
         env["VICTORY_BVH_MISS"] = "0" if bvh_builder else "1"
         env["VICTORY_CARD_BUFFERS_MIN_MB"] = "1"
@@ -670,7 +682,7 @@ def launch_game(cfg, developer):
         env["VICTORY_LAND_THREADS"] = "10"
         env["VICTORY_LAND_SKIP"] = "1"
         env["VICTORY_DYNAMIC_SLOTS"] = "524288"
-        env["VICTORY_RENDER_SCALE"] = "0.583"
+        env["VICTORY_RENDER_SCALE"] = render_scale
         env["VICTORY_OWN_UPSCALER"] = "1"
         env["VICTORY_BVH_MISS"] = "0" if bvh_builder else "1"
         env["VICTORY_CARD_BUFFERS_MIN_MB"] = "1"

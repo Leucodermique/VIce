@@ -1,8 +1,39 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 206"><defs>
-<linearGradient id="sun" x1="0%" y1="0%" x2="12%" y2="100%"><stop stop-color="#7656f4"/><stop offset=".48" stop-color="#ef47ad"/><stop offset="1" stop-color="#ffbb78"/></linearGradient>
-<filter id="shade" x="-20%" y="-30%" width="145%" height="165%"><feDropShadow dx="0" dy="5" stdDeviation="5" flood-color="#180b30" flood-opacity=".75"/></filter>
-</defs><g filter="url(#shade)">
-<g transform="translate(12 6)"><path d="M4 13H63L108 132L154 13H214L136 190H79Z M231 13H309V43H290V160H309V190H231V160H250V43H231Z" fill="#25133e" stroke="#25133e" stroke-width="7" stroke-linejoin="round" transform="translate(3 5)"/><path d="M4 13H63L108 132L154 13H214L136 190H79Z M231 13H309V43H290V160H309V190H231V160H250V43H231Z" fill="url(#sun)" stroke="#f8deff" stroke-width="2.4" stroke-linejoin="round"/></g>
-<g transform="translate(320 27)" fill="none" stroke="#fff4ee" stroke-width="15" stroke-linecap="round" stroke-linejoin="round"><path d="M94 39C98 18 76 17 54 33C31 50 12 78 12 99C12 124 40 133 66 114L87 95"/><path d="M111 83C141 78 170 61 176 44C184 23 163 20 145 35C123 53 104 80 101 98C97 119 112 130 133 120C151 111 170 97 182 84"/></g>
-<path d="M333 176Q407 150 506 164" fill="none" stroke="#ff77bd" stroke-width="6" stroke-linecap="round"/>
-</g></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 212">
+  <defs>
+    <linearGradient id="viGrad" x1="8%" y1="0%" x2="92%" y2="100%">
+      <stop offset="0%" stop-color="#8b5cf6"/>
+      <stop offset="46%" stop-color="#c048f5"/>
+      <stop offset="78%" stop-color="#f24ab8"/>
+      <stop offset="100%" stop-color="#ffaa70"/>
+    </linearGradient>
+    <linearGradient id="viStroke" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity=".95"/>
+      <stop offset="55%" stop-color="#f5c6ff" stop-opacity=".85"/>
+      <stop offset="100%" stop-color="#ffd5b8" stop-opacity=".9"/>
+    </linearGradient>
+    <linearGradient id="swooshGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#a855f7"/>
+      <stop offset="55%" stop-color="#ff5ec4"/>
+      <stop offset="100%" stop-color="#ffad78"/>
+    </linearGradient>
+    <filter id="viShadow" x="-22%" y="-28%" width="148%" height="164%">
+      <feDropShadow dx="0" dy="7" stdDeviation="6" flood-color="#140728" flood-opacity=".85"/>
+      <feDropShadow dx="0" dy="0" stdDeviation="9" flood-color="#b648ff" flood-opacity=".42"/>
+    </filter>
+    <filter id="ceGlow" x="-25%" y="-25%" width="150%" height="150%">
+      <feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="#120624" flood-opacity=".82"/>
+      <feDropShadow dx="0" dy="0" stdDeviation="6" flood-color="#ffffff" flood-opacity=".35"/>
+    </filter>
+  </defs>
+  <g filter="url(#viShadow)" transform="translate(12 8)">
+    <path d="M4 13H63L108 132L154 13H214L136 190H79Z M231 13H309V43H290V160H309V190H231V160H250V43H231Z" fill="#1e0c36" stroke="#1e0c36" stroke-width="8" stroke-linejoin="round" transform="translate(4 6)"/>
+    <path d="M4 13H63L108 132L154 13H214L136 190H79Z M231 13H309V43H290V160H309V190H231V160H250V43H231Z" fill="url(#viGrad)" stroke="url(#viStroke)" stroke-width="2.6" stroke-linejoin="round"/>
+  </g>
+  <g filter="url(#ceGlow)">
+    <g transform="translate(320 29)" fill="none" stroke="#ffffff" stroke-width="15.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M94 39C98 18 76 17 54 33C31 50 12 78 12 99C12 124 40 133 66 114L87 95"/>
+      <path d="M111 83C141 78 170 61 176 44C184 23 163 20 145 35C123 53 104 80 101 98C97 119 112 130 133 120C151 111 170 97 182 84"/>
+    </g>
+    <path d="M333 178Q412 150 510 165" fill="none" stroke="url(#swooshGrad)" stroke-width="6.5" stroke-linecap="round"/>
+  </g>
+</svg>
