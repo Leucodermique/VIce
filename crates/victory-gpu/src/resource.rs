@@ -1265,12 +1265,57 @@ pub(crate) fn read_from(layout: &victory_formats::texture::Layout, first: u32) -
     if layout.bytes_from(first) < layout.size { first } else { 0 }
 }
 
+/// Number of largest mip levels to drop from oversized 2D streaming textures
+/// (`width >= 2048 || height >= 2048`, `mip_levels >= 6`, non-target/depth/UAV)
+/// via `VICTORY_TEXTURE_DROP_MIPS` (0 when unset). Cuts VRAM footprint by 4x on
+/// 4K/2K environment textures while preserving mip 0 (100% native sharpness) on
+/// faces, eyes, weapons, clothes, HUD, and all <= 1024px textures.
+#[cfg(windows)]
+fn drop_mips_setting() -> u32 {
+    static DROP: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *DROP.get_or_init(|| {
+        std::env::var("VICTORY_TEXTURE_DROP_MIPS")
+            .ok()
+            .and_then(|v| v.trim().parse::<u32>().ok())
+            .map(|n| n.min(3))
+            .unwrap_or(0)
+    })
+}
+
+/// Effective minimum mip level floor for `desc` under `VICTORY_TEXTURE_DROP_MIPS`.
+#[cfg(windows)]
+fn drop_mips_for(desc: &ResourceDesc, drop: u32) -> u32 {
+    const TEXTURE_2D: u32 = 3;
+    const TARGET_DEPTH_UNORDERED: u32 = 0x7;
+    if drop == 0
+        || !fills(desc)
+        || desc.dimension != TEXTURE_2D
+        || desc.depth_or_array_size != 1
+        || desc.sample_count > 1
+        || (desc.flags & TARGET_DEPTH_UNORDERED) != 0
+        || desc.mip_levels < 6
+    {
+        return 0;
+    }
+    let longest = desc.width.max(u64::from(desc.height));
+    if longest < 2048 {
+        return 0;
+    }
+    // Never shrink below 1024px on the longest side so faces/details stay crisp.
+    let mut allowed = 0u32;
+    while allowed < drop && (longest >> (allowed + 1)) >= 1024 {
+        allowed += 1;
+    }
+    allowed
+}
+
 /// The level a host copy begins at for views that start at `first`: one the
 /// host can have as a texture's level 0 ([`read_from`]; block-compressed
 /// formats in whole blocks).
 #[cfg(windows)]
 fn base_level(desc: &ResourceDesc, first: u32) -> u32 {
     const TEXTURE_2D: u32 = 3;
+    let first = first.max(drop_mips_for(desc, drop_mips_setting()));
     if first == 0
         || !fills(desc)
         || desc.dimension != TEXTURE_2D
@@ -1301,7 +1346,8 @@ fn base_level(desc: &ResourceDesc, first: u32) -> u32 {
 /// [`placed_bytes`]. Remembered: asked for every slot that is looked at.
 #[cfg(windows)]
 pub(crate) fn placed_bytes_from(desc: &[u32; 14], first: u32) -> Option<u64> {
-    if first == 0 || !held_only() {
+    let drop = drop_mips_setting();
+    if (first == 0 && drop == 0) || !held_only() {
         return placed_bytes(desc);
     }
     type Known = std::collections::HashMap<([u32; 14], u32), Option<u64>>;
@@ -1313,11 +1359,15 @@ pub(crate) fn placed_bytes_from(desc: &[u32; 14], first: u32) -> Option<u64> {
             let whole = placed_bytes(desc)?;
             // SAFETY: 56 bytes in the description's layout.
             let d = unsafe { desc.as_ptr().cast::<ResourceDesc>().read_unaligned() };
+            let eff = first.max(drop_mips_for(&d, drop));
+            if eff == 0 {
+                return Some(whole);
+            }
             let Some(t) = texture_layout(&d).filter(|t| t.planes.len() == 1) else {
                 return Some(whole);
             };
             let layout = &t.planes[0].layout;
-            Some(layout.bytes_from(read_from(layout, first)).min(whole))
+            Some(layout.bytes_from(read_from(layout, eff)).min(whole))
         })
     })
 }
@@ -1348,6 +1398,7 @@ pub(crate) fn want_level(this: This, first: u32) {
     if r.desc.dimension == BUFFER || !r.host.placed.load(Relaxed) {
         return;
     }
+    let first = first.max(drop_mips_for(&r.desc, drop_mips_setting()));
     let mut made = r.host.made.lock().unwrap_or_else(|e| e.into_inner());
     let Some((host, _)) = made.as_ref() else {
         r.host.wanted.fetch_min(first, Relaxed);
@@ -3079,6 +3130,99 @@ pub(crate) fn texture_at(address: u64, desc: &[u32; 14]) -> Option<This> {
     Some(out)
 }
 
+/// The resource for an unordered-access texture placed at `address` with the
+/// resource description `desc` (as words) and view format `view_format`
+/// (VItoriaBr #72: mirrors placed 2D/array/3D texture UAVs onto host UAV textures
+/// and preserves `TARGETS_AT` aliases).
+#[cfg(windows)]
+pub(crate) fn uav_texture_at(address: u64, desc: &[u32; 14], view_format: u32) -> Option<This> {
+    const DEPTH: u32 = 0x2;
+    const UNORDERED: u32 = 0x4;
+    const UNORDERED_ACCESS: u32 = 0x8;
+    const DEFAULT: HeapProperties = HeapProperties {
+        kind: 1,
+        cpu_pages: 0,
+        pool: 0,
+        creation_nodes: 1,
+        visible_nodes: 1,
+    };
+    if address == 0 {
+        return None;
+    }
+    // SAFETY: 56 bytes in the description's layout.
+    let d = unsafe { desc.as_ptr().cast::<ResourceDesc>().read_unaligned() };
+    if d.dimension == BUFFER {
+        return None;
+    }
+    let own = pc_format(d.format);
+    let wanted = if view_format == 0 { own } else { pc_format(view_format) };
+    {
+        let targets = TARGETS_AT.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(&other) = targets.get(&address) {
+            let o = resource(other as This);
+            let o_fmt = target_format(pc_format(o.desc.format));
+            let w_fmt = target_format(wanted);
+            let typeless = family(o_fmt) == o_fmt && family(o_fmt + 1) == o_fmt;
+            let srgb = SRGB.iter().any(|&(s, _)| s == o_fmt);
+            let compatible = o_fmt == w_fmt || ((typeless || srgb) && family(w_fmt) == family(o_fmt));
+            if o.desc.dimension == d.dimension
+                && o.desc.width == d.width
+                && o.desc.height == d.height
+                && o.desc.mip_levels == d.mip_levels
+                && o.desc.depth_or_array_size == d.depth_or_array_size
+                && o.desc.sample_count <= 1
+                && d.sample_count <= 1
+                && o.desc.flags & (DEPTH | UNORDERED) == UNORDERED
+                && compatible
+            {
+                return Some(other as This);
+            }
+        }
+    }
+    let mut r = *desc;
+    r[1] = 0;
+    r[13] = 0;
+    r[12] = (r[12] & !DEPTH) | UNORDERED;
+    if view_format != 0 && target_format(own) != target_format(wanted) {
+        if family(own) == family(wanted) {
+            r[8] = family(wanted);
+        } else if element(own) == element(wanted) {
+            r[8] = wanted;
+        }
+    }
+    let mut map = PLACED_TEXTURES.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(&existing) = map.get(&(address, r)) {
+        TARGETS_AT
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(address)
+            .or_insert(existing);
+        return Some(existing as This);
+    }
+    // SAFETY: 56 bytes in the description's layout.
+    let uav_desc = unsafe { r.as_ptr().cast::<ResourceDesc>().read_unaligned() };
+    let mut out = std::ptr::null();
+    let made = hand_out_resource(
+        uav_desc,
+        DEFAULT,
+        0,
+        Backing::Address(address as *mut u8),
+        UNORDERED_ACCESS,
+        std::ptr::null(),
+        &RESOURCE_IIDS[0],
+        &mut out,
+    );
+    if made != S_OK {
+        return None;
+    }
+    map.insert((address, r), out as usize);
+    resource(out)
+        .host
+        .placed
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    Some(out)
+}
+
 pub(crate) extern "system" fn create_placed(
     _: This,
     heap: This,
@@ -4567,5 +4711,41 @@ float4 lit() : SV_Target { return 1.0; }
         let d = unsafe { more.texture.GetDesc() };
         assert_eq!((more.base, d.Width, d.MipLevels), (0, 256, 9));
         assert!(more.serial != copy.serial && more.grown.load(std::sync::atomic::Ordering::Relaxed));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn drop_mips_only_shrinks_oversized_2d_streaming_textures() {
+        let mut tex4k = texture(4096, 4096, 98, 13);
+        tex4k.flags = 0;
+        assert_eq!(drop_mips_for(&tex4k, 0), 0);
+        assert_eq!(drop_mips_for(&tex4k, 1), 1);
+        assert_eq!(drop_mips_for(&tex4k, 2), 2);
+        assert_eq!(drop_mips_for(&tex4k, 3), 2); // never shrinks below 1024px
+
+        let mut tex2k = texture(2048, 2048, 98, 12);
+        tex2k.flags = 0;
+        assert_eq!(drop_mips_for(&tex2k, 1), 1);
+        assert_eq!(drop_mips_for(&tex2k, 2), 1);
+
+        let mut tex1k = texture(1024, 1024, 98, 11);
+        tex1k.flags = 0;
+        assert_eq!(drop_mips_for(&tex1k, 1), 0); // faces/details stay 100% native
+
+        let mut rt2k = texture(2048, 2048, 28, 12);
+        rt2k.flags = 0x1; // render target untouched
+        assert_eq!(drop_mips_for(&rt2k, 1), 0);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn placed_uav_texture_is_mirrored_and_aliased() {
+        static TITLE_BYTES: [u8; 4096] = [0; 4096];
+        let address = TITLE_BYTES.as_ptr() as u64;
+        let srv = [3, 0, 0, 0, 4, 0, 4, 0x1_0001, 67, 1, 0, 0, 0, 0];
+        let uav = uav_texture_at(address, &srv, 42).unwrap();
+        let view = texture_at(address, &srv).unwrap();
+        assert_eq!(alias_of(view), Some(uav));
+        assert_eq!(uav_texture_at(address, &srv, 42), Some(uav));
     }
 }

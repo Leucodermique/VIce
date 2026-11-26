@@ -808,8 +808,10 @@ impl View {
     /// such views get host slots only for draws.
     #[cfg(windows)]
     fn is_buffer(&self) -> bool {
+        const BUFFER: u32 = 1;
         match self {
-            View::Constant(..) | View::Placed(..) => true,
+            View::Constant(..) | View::Placed(false, ..) => true,
+            View::Placed(true, resource, _) => resource[0] == BUFFER,
             View::Shader(r, _) | View::Unordered(r, _, _) => {
                 crate::resource::buffer_bytes(*r as This).is_some()
             }

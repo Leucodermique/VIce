@@ -135,6 +135,10 @@ pub(crate) struct HostHeap {
     /// The same for a slot whose descriptor is made and stays (else 0): what
     /// [`HostHeap::mirror`] asks first, without the lock. Changed under it.
     quick: Vec<std::sync::atomic::AtomicU64>,
+    /// Per title slot, the null-view kind currently stored (1 = buffer SRV,
+    /// 2 = CBV, 3 = buffer UAV, 0 = other/non-null) so `VICTORY_SYNC_NULL_SKIP`
+    /// avoids recreating identical null descriptors (myokex c3723f3).
+    nulls: Vec<std::sync::atomic::AtomicU8>,
     /// The records of the title's heap as the pass over records copied in
     /// as bytes last saw them ([`Copied::changes`]). Made on first
     /// use.
@@ -1582,6 +1586,9 @@ impl HostHeap {
                 .collect(),
             made: Made::new(count as usize),
             quick: (0..count).map(|_| std::sync::atomic::AtomicU64::new(0)).collect(),
+            nulls: (0..if sampler { 0 } else { count })
+                .map(|_| std::sync::atomic::AtomicU8::new(0))
+                .collect(),
             copied: Mutex::new(Vec::new()),
             waiting: Mutex::default(),
             away: Mutex::default(),
@@ -2709,6 +2716,9 @@ impl HostHeap {
 
     /// Slot `index` now views `resource` (or nothing of the host's).
     fn keep(&self, index: u32, resource: Option<ID3D12Resource>) {
+        if let Some(null) = self.nulls.get(index as usize) {
+            null.store(0, std::sync::atomic::Ordering::Relaxed);
+        }
         let Some(slot) = self.kept.get(index as usize) else {
             return;
         };
@@ -3115,13 +3125,31 @@ impl HostHeap {
                 make_twinned(&view, self.at(index), self.twin(index))
             };
             if kept.is_none() && !self.sampler {
+                let kind = null_kind(&view);
+                let null = self.nulls.get(index as usize);
+                if kind != 0
+                    && null_skip()
+                    && null.is_some_and(|n| n.load(std::sync::atomic::Ordering::Relaxed) == kind)
+                {
+                    self.quick_is(index, if later { 0 } else { key });
+                    drop(held);
+                    self.unmake_stale(index, stale);
+                    return Some(view);
+                }
                 null_for(&view, self.at(index));
-            }
-            if kept.is_some() || !self.sampler {
                 self.put(index);
+                self.twin_made(index, false);
+                self.keep(index, None);
+                if let Some(null) = null {
+                    null.store(kind, std::sync::atomic::Ordering::Relaxed);
+                }
+            } else {
+                if kept.is_some() || !self.sampler {
+                    self.put(index);
+                }
+                self.twin_made(index, kept.is_some() && twinned(&view));
+                self.keep(index, kept.flatten());
             }
-            self.twin_made(index, kept.is_some() && twinned(&view));
-            self.keep(index, kept.flatten());
             self.quick_is(index, if later { 0 } else { key });
             drop(held);
             self.unmake_stale(index, stale);
@@ -4203,25 +4231,6 @@ fn make_twinned(
             }
             const BUFFER: u32 = 1;
             if resource[0] != BUFFER {
-                // shortcut: unordered access to a texture the title placed
-                // itself is not mirrored; give it a resource as shader
-                // views of such textures get when a dispatch writes one.
-                // Each texture is said once (the first 64), with how many times
-                // such a view was asked for so far: what shaders write through
-                // them is lost.
-                static SAID: Mutex<std::collections::BTreeSet<u64>> = Mutex::new(std::collections::BTreeSet::new());
-                static TIMES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-                let times = TIMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-                let at = u64::from(desc[10]) | u64::from(desc[11]) << 32;
-                let mut said = SAID.lock().unwrap_or_else(|e| e.into_inner());
-                if (said.len() < 64 && said.insert(at)) || times.is_power_of_two() {
-                    tracing::warn!(
-                        address = format_args!("{at:#x}"),
-                        times,
-                        "placed unordered texture view not mirrored (null: writes through it are lost): resource {resource:?}, view {:?}",
-                        &desc[..10]
-                    );
-                }
                 return None;
             }
             // The resource description's width, after the alignment.
@@ -4532,20 +4541,52 @@ fn same_placed_texture(a: &View, b: &View) -> bool {
     }
 }
 
-/// A shader view of a texture the title placed in memory itself, as a view
-/// of the resource made for that memory (on first use).
+/// Whether an identical null view is skipped (`VICTORY_SYNC_NULL_SKIP=0` to
+/// recreate it as before; on by default, ported from myokex c3723f3).
+fn null_skip() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_SYNC_NULL_SKIP").is_none_or(|v| v != "0"))
+}
+
+/// Kind of null view for buffer/constant slots (1 = buffer SRV, 2 = CBV,
+/// 3 = buffer UAV, 0 = other).
+fn null_kind(view: &View) -> u8 {
+    let is_buffer = |r: &usize| crate::resource::buffer_bytes(*r as crate::object::This).is_some();
+    match view {
+        View::Constant(..) => 2,
+        View::Unordered(r, _, desc) if is_buffer(r) || desc.is_some_and(|d| d[1] == 1) => 3,
+        View::Placed(true, resource, _) if resource[0] == 1 => 3,
+        View::Shader(r, desc) if is_buffer(r) || desc.is_some_and(|d| d[1] == 1) => 1,
+        View::Placed(false, resource, _) if resource[0] == 1 => 1,
+        _ => 0,
+    }
+}
+
+/// A shader or unordered access view of a texture the title placed in
+/// memory itself, as a view of the resource made for that memory (on first
+/// use) (VItoriaBr #72).
 pub(crate) fn placed_texture(view: &View) -> Option<View> {
     const BUFFER: u32 = 1;
-    let View::Placed(false, resource, desc) = view else {
+    const TARGET_DEPTH_UNORDERED: u32 = 0x7;
+    let &View::Placed(unordered, mut resource, ref desc) = view else {
         return None;
     };
     if resource[0] == BUFFER {
         return None;
     }
     let address = u64::from(desc[10]) | u64::from(desc[11]) << 32;
-    let texture = crate::resource::texture_at(address, resource)?;
-    crate::resource::want_level(texture, crate::resource::first_mip(desc));
-    Some(View::Shader(texture as usize, desc[..10].try_into().ok()))
+    let words = desc[..10].try_into().ok();
+    if unordered {
+        let texture = crate::resource::uav_texture_at(address, &resource, desc[0])?;
+        Some(View::Unordered(texture as usize, 0, words))
+    } else {
+        // Clear target flags the title left on the resource description so this
+        // placed SRV never replaces a real target in `TARGETS_AT`.
+        resource[12] &= !TARGET_DEPTH_UNORDERED;
+        let texture = crate::resource::texture_at(address, &resource)?;
+        crate::resource::want_level(texture, crate::resource::first_mip(desc));
+        Some(View::Shader(texture as usize, words))
+    }
 }
 
 /// A null view of the kind `view` is, for a slot whose view the host
