@@ -587,54 +587,14 @@ def launch_game(cfg, developer):
     bvh_builder = bool(cfg.get("bvhBuilder", False))
 
     if fast_gpu:
-        # RTX 4070 Laptop 8 GB VRAM / 16 GB RAM — Clean, Zero-Ghosting & Fast profile:
-        # - VICTORY_RELAY=1 + VICTORY_CARD_STEPS=0: eliminates ghosting / stretched / jumping bodies on Lucia & NPCs.
-        # - Series S 720p -> 1080p (VICTORY_RENDER_SCALE=0.667, max safe on Series S) + VICTORY_OWN_UPSCALER=1.
-        # - VICTORY_COMPOSE=1 + VICTORY_PLANE_PREMULTIPLIED=1: crisp 4K UI & subtitles alpha blending.
-        # - 8 GB VRAM headroom (previous run hit 7246/7180 MB = 101% -> 66,809 texture evictions & green faces):
-        #   * CARD_BUFFERS_MB=512 + WINDOWS_BAR_MB=1024 + CARD_ROOM_FOR_TARGETS_MB=1280 + TEXTURE_ROOM_PERCENT=90
-        #   * TEXTURE_STAGE_MB=384 + TEXTURE_CATCHUP=1 + TEXTURE_NO_WAIT=0 + AWAY_MS=8000
-        # - VICTORY_AMBIENT=0.75 / AIR=0.9 / MOST=1.5 + NAN_SCRUB=1: removes prison haze/ghostly glow.
-        env["VICTORY_TEXTURE_NO_WAIT"] = "0"
-        env["VICTORY_RELAY"] = "1"
-        env["VICTORY_CARD_STEPS"] = "0"
-        env["VICTORY_WIDE_BACK"] = "1"
-        env["VICTORY_CARD_REHASH_RUNS"] = "1"
-        env["VICTORY_JOIN_COPIES"] = "1"
-        env["VICTORY_INDIRECT_WINDOW"] = "1"
-        env["VICTORY_RELAY_COPY"] = "1"
-        env["VICTORY_INDIRECT_BATCH"] = "2"
-        env["VICTORY_MAP_THREADS"] = "1"
-        env["VICTORY_TITLE_PRIORITIES"] = "0"
-        env["VICTORY_CARD_AWAKE"] = "1"
-        env["VICTORY_SHOW_AFTER"] = "1"
-        env["VICTORY_AMBIENT"] = "off" if bvh_builder else "0.75"
-        env["VICTORY_AMBIENT_AIR"] = "0.9"
-        env["VICTORY_AMBIENT_MOST"] = "1.5"
-        env["VICTORY_NAN_SCRUB"] = "1"
-        env["VICTORY_D3D12_DRED"] = "light"
-        env["VICTORY_THIN"] = "1"
-        env["VICTORY_JOIN_PARTS"] = "8"
-        env["VICTORY_UPLOAD_AHEAD"] = "1"
-        env["VICTORY_PIPELINE_WAIT_MS"] = "10000"
-        env["VICTORY_DYNAMIC_SLOTS"] = "524288"
-        env["VICTORY_RENDER_SCALE"] = "0.667"
-        env["VICTORY_OWN_UPSCALER"] = "1"
-        env["VICTORY_BVH_MISS"] = "0" if bvh_builder else "1"
-        env["VICTORY_CARD_BUFFERS_MIN_MB"] = "1"
-        env["VICTORY_CARD_BUFFERS_MB"] = "512"
-        env["VICTORY_CARD_ROOM_FOR_TARGETS_MB"] = "1280"
-        env["VICTORY_TEXTURE_BUDGET_MB"] = "2048"
-        env["VICTORY_TEXTURE_ROOM_PERCENT"] = "90"
-        env["VICTORY_TEXTURE_STAGE_MB"] = "256"
-        env["VICTORY_TEXTURE_CATCHUP"] = "1"
-        env["VICTORY_TEXTURE_AWAY_MS"] = "3000"
-        env["VICTORY_COMPOSE"] = "1"
-        env["VICTORY_PLANE_PREMULTIPLIED"] = "1"
-        env["VICTORY_WINDOWS_BAR_MB"] = "2560"
-        env["VICTORY_NO_WATCHDOG"] = "1"
-    else:
-        # Max-FPS mode (uses RELAY=2 + CARD_STEPS=2 + 540p for maximum raw FPS at the cost of some mesh jitter)
+        # RTX 4070 Laptop 8 GB VRAM / 16 GB RAM — High-FPS (14-16+ native / ~30 Smooth Motion), Sharp 720p & Stable:
+        # - VICTORY_RELAY=2 + VICTORY_CARD_STEPS=2 + CARD_BUFFERS_MB=1024: cuts GPU wait from 81 ms -> 0 ms
+        #   and keeps all >=1 MiB buffer compares on GPU (restores 14-16 native FPS instead of 7 FPS).
+        # - VICTORY_TEXTURE_ROOM_PERCENT=95 + CARD_ROOM_FOR_TARGETS_MB=1280 (no artificial TEXTURE_BUDGET_MB cap):
+        #   fixes "passes that made none for lack of room: 321" (eliminates black waitress face).
+        # - VICTORY_WINDOWS_BAR_MB=2048 + AWAY_MS=3000: prevents 0x8007000E shared-RAM OOM on 16 GB PCs.
+        # - VICTORY_AMBIENT=0.35 / AIR=0.8 / MOST=1.5: keeps shadows readable without washing out hair/skin into a ghostly look.
+        # - Series S 720p -> 1080p (VICTORY_RENDER_SCALE=0.667) + VICTORY_OWN_UPSCALER=1 + VICTORY_COMPOSE=1.
         env["VICTORY_TEXTURE_NO_WAIT"] = "0"
         env["VICTORY_RELAY"] = "2"
         env["VICTORY_CARD_STEPS"] = "2"
@@ -648,8 +608,8 @@ def launch_game(cfg, developer):
         env["VICTORY_TITLE_PRIORITIES"] = "0"
         env["VICTORY_CARD_AWAKE"] = "1"
         env["VICTORY_SHOW_AFTER"] = "1"
-        env["VICTORY_AMBIENT"] = "off" if bvh_builder else "0.75"
-        env["VICTORY_AMBIENT_AIR"] = "0.9"
+        env["VICTORY_AMBIENT"] = "off" if bvh_builder else "0.35"
+        env["VICTORY_AMBIENT_AIR"] = "0.8"
         env["VICTORY_AMBIENT_MOST"] = "1.5"
         env["VICTORY_NAN_SCRUB"] = "1"
         env["VICTORY_D3D12_DRED"] = "light"
@@ -658,20 +618,58 @@ def launch_game(cfg, developer):
         env["VICTORY_UPLOAD_AHEAD"] = "1"
         env["VICTORY_PIPELINE_WAIT_MS"] = "10000"
         env["VICTORY_DYNAMIC_SLOTS"] = "524288"
-        env["VICTORY_RENDER_SCALE"] = "0.5"
+        env["VICTORY_RENDER_SCALE"] = "0.667"
         env["VICTORY_OWN_UPSCALER"] = "1"
         env["VICTORY_BVH_MISS"] = "0" if bvh_builder else "1"
         env["VICTORY_CARD_BUFFERS_MIN_MB"] = "1"
-        env["VICTORY_CARD_BUFFERS_MB"] = "512"
+        env["VICTORY_CARD_BUFFERS_MB"] = "1024"
         env["VICTORY_CARD_ROOM_FOR_TARGETS_MB"] = "1280"
-        env["VICTORY_TEXTURE_BUDGET_MB"] = "2048"
-        env["VICTORY_TEXTURE_ROOM_PERCENT"] = "90"
+        env["VICTORY_TEXTURE_ROOM_PERCENT"] = "95"
         env["VICTORY_TEXTURE_STAGE_MB"] = "256"
         env["VICTORY_TEXTURE_CATCHUP"] = "1"
         env["VICTORY_TEXTURE_AWAY_MS"] = "3000"
         env["VICTORY_COMPOSE"] = "1"
         env["VICTORY_PLANE_PREMULTIPLIED"] = "1"
-        env["VICTORY_WINDOWS_BAR_MB"] = "2560"
+        env["VICTORY_WINDOWS_BAR_MB"] = "2048"
+        env["VICTORY_NO_WATCHDOG"] = "1"
+    else:
+        # Conservative Quality mode (RELAY=1, CARD_STEPS=0: slower ~7-10 FPS, zero mesh jitter)
+        env["VICTORY_TEXTURE_NO_WAIT"] = "0"
+        env["VICTORY_RELAY"] = "1"
+        env["VICTORY_CARD_STEPS"] = "0"
+        env["VICTORY_WIDE_BACK"] = "1"
+        env["VICTORY_CARD_REHASH_RUNS"] = "1"
+        env["VICTORY_JOIN_COPIES"] = "1"
+        env["VICTORY_INDIRECT_WINDOW"] = "1"
+        env["VICTORY_RELAY_COPY"] = "1"
+        env["VICTORY_INDIRECT_BATCH"] = "2"
+        env["VICTORY_MAP_THREADS"] = "1"
+        env["VICTORY_TITLE_PRIORITIES"] = "0"
+        env["VICTORY_CARD_AWAKE"] = "1"
+        env["VICTORY_SHOW_AFTER"] = "1"
+        env["VICTORY_AMBIENT"] = "off" if bvh_builder else "0.35"
+        env["VICTORY_AMBIENT_AIR"] = "0.8"
+        env["VICTORY_AMBIENT_MOST"] = "1.5"
+        env["VICTORY_NAN_SCRUB"] = "1"
+        env["VICTORY_D3D12_DRED"] = "light"
+        env["VICTORY_THIN"] = "1"
+        env["VICTORY_JOIN_PARTS"] = "8"
+        env["VICTORY_UPLOAD_AHEAD"] = "1"
+        env["VICTORY_PIPELINE_WAIT_MS"] = "10000"
+        env["VICTORY_DYNAMIC_SLOTS"] = "524288"
+        env["VICTORY_RENDER_SCALE"] = "0.667"
+        env["VICTORY_OWN_UPSCALER"] = "1"
+        env["VICTORY_BVH_MISS"] = "0" if bvh_builder else "1"
+        env["VICTORY_CARD_BUFFERS_MIN_MB"] = "1"
+        env["VICTORY_CARD_BUFFERS_MB"] = "1024"
+        env["VICTORY_CARD_ROOM_FOR_TARGETS_MB"] = "1280"
+        env["VICTORY_TEXTURE_ROOM_PERCENT"] = "95"
+        env["VICTORY_TEXTURE_STAGE_MB"] = "256"
+        env["VICTORY_TEXTURE_CATCHUP"] = "1"
+        env["VICTORY_TEXTURE_AWAY_MS"] = "3000"
+        env["VICTORY_COMPOSE"] = "1"
+        env["VICTORY_PLANE_PREMULTIPLIED"] = "1"
+        env["VICTORY_WINDOWS_BAR_MB"] = "2048"
         env["VICTORY_NO_WATCHDOG"] = "1"
 
     rt_hashes_file = ENGINE / "scripts" / "rt_off_hashes.txt"
