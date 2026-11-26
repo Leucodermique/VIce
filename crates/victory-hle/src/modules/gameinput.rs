@@ -12,7 +12,7 @@ use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::ops::Deref;
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Condvar, LazyLock, Mutex, MutexGuard, PoisonError};
 use std::thread::ThreadId;
 use std::time::{Duration, Instant};
@@ -127,6 +127,14 @@ const PC_QWERTY_BUTTONS: [(u8, u32); 20] = [
     (0x25, LEFT),
     (0x27, RIGHT),
 ];
+
+/// True while mouse look is actively capturing inside the focused title window
+/// (read by `lifecycle::window_proc` on `WM_SETCURSOR` to hide the OS cursor).
+static CURSOR_HIDDEN: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn cursor_hidden() -> bool {
+    CURSOR_HIDDEN.load(Ordering::Relaxed)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum KeyboardLayout {
@@ -591,10 +599,18 @@ impl State {
         let now = now();
         let mut events = std::mem::take(&mut self.pending);
         let kb_mouse = merged(fallback(&keys), mouse);
+        // When a PC keyboard layout drives the virtual gamepad, keep the
+        // separate GameInput keyboard device empty so the title never receives
+        // duplicate keyboard + gamepad inputs for the same keypress.
+        let reported_keys = if keyboard_layout() == KeyboardLayout::Classic {
+            keys
+        } else {
+            Vec::new()
+        };
         if one_pad {
             let pad = pads.into_iter().flatten().fold(kb_mouse, merged);
             self.update(devices, FALLBACK, Some(Value::Pad(pad)), now, &mut events);
-            self.update(devices, KEYBOARD, Some(Value::Keys(keys)), now, &mut events);
+            self.update(devices, KEYBOARD, Some(Value::Keys(reported_keys)), now, &mut events);
             return events;
         }
         let any_pad = pads.iter().any(Option::is_some);
@@ -603,7 +619,7 @@ impl State {
         }
         let fallback_pad = (!any_pad).then(|| Value::Pad(kb_mouse));
         self.update(devices, FALLBACK, fallback_pad, now, &mut events);
-        self.update(devices, KEYBOARD, Some(Value::Keys(keys)), now, &mut events);
+        self.update(devices, KEYBOARD, Some(Value::Keys(reported_keys)), now, &mut events);
         events
     }
 
@@ -1312,7 +1328,7 @@ mod host {
                 .ok()
                 .and_then(|v| v.trim().parse::<f32>().ok())
                 .filter(|v| *v > 0.001 && *v <= 1.0)
-                .unwrap_or(0.028)
+                .unwrap_or(0.018)
         });
         *SENS
     }
@@ -1388,17 +1404,20 @@ mod host {
 
         fn mouse_pad(&mut self) -> PadState {
             let Some(hwnd) = focused_window() else {
+                CURSOR_HIDDEN.store(false, Ordering::Relaxed);
                 self.mouse_primed = false;
                 self.smooth_x = 0.0;
                 self.smooth_y = 0.0;
                 return PadState::default();
             };
-            // Toggle mouse-look capture anytime with F8 (Esc releases until next click inside).
+            // Toggle mouse-look capture anytime with F8.
             // SAFETY: plain key state query.
             let f8_down = unsafe { GetAsyncKeyState(i32::from(VK_F8)) } < 0;
             if f8_down && !self.f8_was_down {
                 self.mouse_captured = !self.mouse_captured;
                 self.mouse_primed = false;
+                self.smooth_x = 0.0;
+                self.smooth_y = 0.0;
                 tracing::info!(captured = self.mouse_captured, "mouse look toggled (F8)");
             }
             self.f8_was_down = f8_down;
@@ -1410,18 +1429,20 @@ mod host {
                 (GetWindowRect(hwnd, &mut rect) != 0, GetCursorPos(&mut pt) != 0)
             };
             if !ok_rect || !ok_pt {
+                CURSOR_HIDDEN.store(false, Ordering::Relaxed);
                 return PadState::default();
             }
             let width = rect.right - rect.left;
             let height = rect.bottom - rect.top;
             if width < 64 || height < 64 {
+                CURSOR_HIDDEN.store(false, Ordering::Relaxed);
                 return PadState::default();
             }
             // Leave the top 34 px title bar free so clicking Close/Minimize never fires triggers.
-            let inside_body = pt.x >= rect.left + 4
-                && pt.x <= rect.right - 4
+            let inside_body = pt.x >= rect.left + 8
+                && pt.x <= rect.right - 8
                 && pt.y >= rect.top + 34
-                && pt.y <= rect.bottom - 4;
+                && pt.y <= rect.bottom - 8;
 
             // SAFETY: plain key state queries for mouse buttons.
             let lmb = unsafe { GetAsyncKeyState(i32::from(VK_LBUTTON)) } < 0;
@@ -1429,7 +1450,7 @@ mod host {
             let mmb = unsafe { GetAsyncKeyState(i32::from(VK_MBUTTON)) } < 0;
 
             let mut pad = PadState::default();
-            if inside_body || self.mouse_captured {
+            if inside_body || self.mouse_primed {
                 if lmb {
                     pad.right_trigger = 1.0;
                 }
@@ -1442,6 +1463,7 @@ mod host {
             }
 
             if !self.mouse_captured {
+                CURSOR_HIDDEN.store(false, Ordering::Relaxed);
                 self.smooth_x = 0.0;
                 self.smooth_y = 0.0;
                 return pad;
@@ -1454,27 +1476,31 @@ mod host {
                     // SAFETY: recenter inside our focused game window.
                     unsafe { SetCursorPos(cx, cy) };
                     self.mouse_primed = true;
+                    CURSOR_HIDDEN.store(true, Ordering::Relaxed);
+                } else {
+                    CURSOR_HIDDEN.store(false, Ordering::Relaxed);
                 }
                 self.smooth_x = 0.0;
                 self.smooth_y = 0.0;
                 return pad;
             }
 
+            CURSOR_HIDDEN.store(true, Ordering::Relaxed);
             let dx = (pt.x - cx) as f32;
             let dy = (pt.y - cy) as f32;
             if dx != 0.0 || dy != 0.0 {
                 // SAFETY: recenter inside our focused game window for continuous 360 camera.
                 unsafe { SetCursorPos(cx, cy) };
             }
+            // Accumulate mouse delta with ~65 ms decay so 10-20 FPS frames always
+            // read smooth, proportional camera motion instead of dropping to 0 between frames.
             let sens = mouse_sensitivity();
-            let raw_x = (dx * sens).clamp(-1.0, 1.0);
-            let raw_y = (-dy * sens).clamp(-1.0, 1.0);
-            self.smooth_x = (self.smooth_x * 0.4 + raw_x * 0.6).clamp(-1.0, 1.0);
-            self.smooth_y = (self.smooth_y * 0.4 + raw_y * 0.6).clamp(-1.0, 1.0);
-            if self.smooth_x.abs() < 0.005 {
+            self.smooth_x = (self.smooth_x * 0.84 + dx * sens).clamp(-1.0, 1.0);
+            self.smooth_y = (self.smooth_y * 0.84 - dy * sens).clamp(-1.0, 1.0);
+            if self.smooth_x.abs() < 0.008 {
                 self.smooth_x = 0.0;
             }
-            if self.smooth_y.abs() < 0.005 {
+            if self.smooth_y.abs() < 0.008 {
                 self.smooth_y = 0.0;
             }
             pad.right_x = self.smooth_x;

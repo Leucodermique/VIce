@@ -246,6 +246,15 @@ extern "system" fn window_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    // Hide the OS mouse cursor inside the client area while PC mouse-look is active (F8 toggles it).
+    if message == wm::WM_SETCURSOR
+        && (lparam as u32 & 0xFFFF) == wm::HTCLIENT
+        && super::gameinput::cursor_hidden()
+    {
+        // SAFETY: passing null hides the cursor on the window's own thread.
+        unsafe { wm::SetCursor(std::ptr::null_mut()) };
+        return 1;
+    }
     // A user close (close button, Alt+F4, window or taskbar menu); a
     // console title never sees one, nor a WM_CLOSE from it.
     if message == wm::WM_SYSCOMMAND && wparam & 0xFFF0 == wm::SC_CLOSE as usize {
