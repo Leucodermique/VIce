@@ -83,8 +83,8 @@ const FALLBACK_BUTTONS: [(u8, u32); 14] = [
 ];
 
 /// GTA-style PC keyboard buttons for AZERTY (Z/Q/S/D movement) and QWERTY
-/// (W/A/S/D movement), paired with mouse look and mouse clicks (LMB=RT, RMB=LT, MMB=R3).
-const PC_AZERTY_BUTTONS: [(u8, u32); 20] = [
+/// (W/A/S/D movement), paired with native 360 mouse look and mouse clicks (LMB=RT, RMB=LT, MMB=R3).
+const PC_AZERTY_BUTTONS: [(u8, u32); 22] = [
     (0x1B, MENU),           // Esc -> Pause
     (b'P', MENU),           // P -> Pause
     (b'V', VIEW),           // V -> Camera view
@@ -101,13 +101,15 @@ const PC_AZERTY_BUTTONS: [(u8, u32); 20] = [
     (0xA2, LEFT_STICK),     // Left Ctrl -> Crouch / Stealth (L3)
     (b'C', RIGHT_STICK),    // C -> Look behind / Zoom (R3)
     (b'E', RIGHT),          // E -> Interact (D-Pad Right)
+    (b'T', UP),             // T -> Phone (D-Pad Up)
+    (0xA4, DOWN),           // Left Alt -> Character wheel / Minimap (D-Pad Down)
     (0x26, UP),             // Up arrow -> Phone / D-Pad Up
     (0x28, DOWN),           // Down arrow -> D-Pad Down
     (0x25, LEFT),           // Left arrow -> D-Pad Left
     (0x27, RIGHT),          // Right arrow -> D-Pad Right
 ];
 
-const PC_QWERTY_BUTTONS: [(u8, u32); 20] = [
+const PC_QWERTY_BUTTONS: [(u8, u32); 22] = [
     (0x1B, MENU),
     (b'P', MENU),
     (b'V', VIEW),
@@ -124,6 +126,8 @@ const PC_QWERTY_BUTTONS: [(u8, u32); 20] = [
     (0xA2, LEFT_STICK),
     (b'C', RIGHT_STICK),
     (b'E', RIGHT),
+    (b'T', UP),
+    (0xA4, DOWN),
     (0x26, UP),
     (0x28, DOWN),
     (0x25, LEFT),
@@ -298,6 +302,24 @@ fn fallback_for(layout: KeyboardLayout, keys: &[KeyState]) -> PadState {
 
 fn fallback(keys: &[KeyState]) -> PadState {
     fallback_for(keyboard_layout(), keys)
+}
+
+/// Maps focused mouse clicks (LMB -> RT fire/accelerate, RMB -> LT aim/brake,
+/// MMB -> R3 look behind) onto the stand-in gamepad for PC layouts while
+/// native `MOUSE_KIND` drives the 360 camera smoothly.
+fn mouse_click_pad(layout: KeyboardLayout, mouse: Option<MouseState>) -> PadState {
+    if !matches!(layout, KeyboardLayout::Azerty | KeyboardLayout::Qwerty) {
+        return PadState::default();
+    }
+    let Some(m) = mouse else {
+        return PadState::default();
+    };
+    PadState {
+        buttons: if m.buttons & 0x4 != 0 { RIGHT_STICK } else { 0 },
+        left_trigger: if m.buttons & 0x2 != 0 { 1.0 } else { 0.0 },
+        right_trigger: if m.buttons & 0x1 != 0 { 1.0 } else { 0.0 },
+        ..Default::default()
+    }
 }
 
 /// Two pads as one: buttons of both, and of each axis and trigger the one
@@ -651,13 +673,15 @@ impl State {
         let now = now();
         let mut events = std::mem::take(&mut self.pending);
         self.update(devices, MOUSE, mouse.map(Value::Mouse), now, &mut events);
-        let stand_in = fallback(&keys);
+        let layout = keyboard_layout();
+        let stand_in = merged(fallback(&keys), mouse_click_pad(layout, mouse));
         // - Classic / Native: expose the real GameInput keyboard device (in
         //   Native mode, drop Enter from KEYBOARD_KIND so Enter -> A on the
         //   stand-in pad never double-submits menu selections).
-        // - Azerty / Qwerty (legacy virtual-pad modes): keep KEYBOARD_KIND
-        //   empty to prevent duplicate keyboard + gamepad actions.
-        let reported_keys = match keyboard_layout() {
+        // - Azerty / Qwerty (console-build PC layouts): drive GAMEPAD_KIND from
+        //   keyboard + mouse clicks and MOUSE_KIND for 360 camera, keeping
+        //   KEYBOARD_KIND empty to avoid duplicate/debug actions.
+        let reported_keys = match layout {
             KeyboardLayout::Classic => keys,
             KeyboardLayout::Native => keys.into_iter().filter(|k| k.virtual_key != 0x0D).collect(),
             KeyboardLayout::Azerty | KeyboardLayout::Qwerty => Vec::new(),
@@ -2080,6 +2104,27 @@ mod tests {
         assert_eq!(pad.buttons, A | X | Y | B | RIGHT | LEFT_STICK | VIEW);
         let back_left = fallback_for(KeyboardLayout::Azerty, &[key(b'S'), key(b'Q')]);
         assert_eq!((back_left.left_x, back_left.left_y), (-1.0, -1.0));
+        let clicks = mouse_click_pad(
+            KeyboardLayout::Azerty,
+            Some(MouseState {
+                buttons: 0x7,
+                ..Default::default()
+            }),
+        );
+        assert_eq!(
+            (clicks.right_trigger, clicks.left_trigger, clicks.buttons),
+            (1.0, 1.0, RIGHT_STICK)
+        );
+        assert_eq!(
+            mouse_click_pad(
+                KeyboardLayout::Classic,
+                Some(MouseState {
+                    buttons: 0x7,
+                    ..Default::default()
+                }),
+            ),
+            PadState::default()
+        );
     }
 
     #[test]
