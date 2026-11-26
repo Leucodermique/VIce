@@ -587,13 +587,14 @@ def launch_game(cfg, developer):
     bvh_builder = bool(cfg.get("bvhBuilder", False))
 
     if fast_gpu:
-        # RTX 4070 Laptop 8 GB VRAM / 16 GB RAM — High-FPS (14-16+ native / ~30 Smooth Motion), Sharp 720p & Stable:
+        # RTX 4070 Laptop 8 GB VRAM / 16 GB RAM — High-FPS (14-16+ native / ~30 Smooth Motion), Sharp 720p & Clean Visuals:
         # - VICTORY_RELAY=2 + VICTORY_CARD_STEPS=2 + CARD_BUFFERS_MB=1024: cuts GPU wait from 81 ms -> 0 ms
-        #   and keeps all >=1 MiB buffer compares on GPU (restores 14-16 native FPS instead of 7 FPS).
-        # - VICTORY_TEXTURE_ROOM_PERCENT=95 + CARD_ROOM_FOR_TARGETS_MB=1280 (no artificial TEXTURE_BUDGET_MB cap):
-        #   fixes "passes that made none for lack of room: 321" (eliminates black waitress face).
+        #   and keeps all >=1 MiB buffer compares on GPU (14-16+ native FPS).
+        # - VICTORY_TEXTURE_ROOM_PERCENT=95 + CARD_ROOM_FOR_TARGETS_MB=1280 + HEAP_RECHECK_EVERY=60:
+        #   keeps VRAM streaming open and rechecks late-arriving skin/face textures (eliminates black faces).
         # - VICTORY_WINDOWS_BAR_MB=2048 + AWAY_MS=3000: prevents 0x8007000E shared-RAM OOM on 16 GB PCs.
-        # - VICTORY_AMBIENT=0.35 / AIR=0.8 / MOST=1.5: keeps shadows readable without washing out hair/skin into a ghostly look.
+        # - VICTORY_AMBIENT=0.45 / AIR=0.55 / MOST=1.35: lights dark rooms cleanly while cutting the sunset
+        #   orange veil that washed out Lucia's hair/face near the prison window.
         # - Series S 720p -> 1080p (VICTORY_RENDER_SCALE=0.667) + VICTORY_OWN_UPSCALER=1 + VICTORY_COMPOSE=1.
         env["VICTORY_TEXTURE_NO_WAIT"] = "0"
         env["VICTORY_RELAY"] = "2"
@@ -608,9 +609,9 @@ def launch_game(cfg, developer):
         env["VICTORY_TITLE_PRIORITIES"] = "0"
         env["VICTORY_CARD_AWAKE"] = "1"
         env["VICTORY_SHOW_AFTER"] = "1"
-        env["VICTORY_AMBIENT"] = "off" if bvh_builder else "0.35"
-        env["VICTORY_AMBIENT_AIR"] = "0.8"
-        env["VICTORY_AMBIENT_MOST"] = "1.5"
+        env["VICTORY_AMBIENT"] = "off" if bvh_builder else "0.45"
+        env["VICTORY_AMBIENT_AIR"] = "0.55"
+        env["VICTORY_AMBIENT_MOST"] = "1.35"
         env["VICTORY_NAN_SCRUB"] = "1"
         env["VICTORY_D3D12_DRED"] = "light"
         env["VICTORY_THIN"] = "1"
@@ -628,8 +629,8 @@ def launch_game(cfg, developer):
         env["VICTORY_TEXTURE_STAGE_MB"] = "256"
         env["VICTORY_TEXTURE_CATCHUP"] = "1"
         env["VICTORY_TEXTURE_AWAY_MS"] = "3000"
+        env["VICTORY_HEAP_RECHECK_EVERY"] = "60"
         env["VICTORY_COMPOSE"] = "1"
-        env["VICTORY_PLANE_PREMULTIPLIED"] = "1"
         env["VICTORY_WINDOWS_BAR_MB"] = "2048"
         env["VICTORY_NO_WATCHDOG"] = "1"
     else:
@@ -647,9 +648,9 @@ def launch_game(cfg, developer):
         env["VICTORY_TITLE_PRIORITIES"] = "0"
         env["VICTORY_CARD_AWAKE"] = "1"
         env["VICTORY_SHOW_AFTER"] = "1"
-        env["VICTORY_AMBIENT"] = "off" if bvh_builder else "0.35"
-        env["VICTORY_AMBIENT_AIR"] = "0.8"
-        env["VICTORY_AMBIENT_MOST"] = "1.5"
+        env["VICTORY_AMBIENT"] = "off" if bvh_builder else "0.45"
+        env["VICTORY_AMBIENT_AIR"] = "0.55"
+        env["VICTORY_AMBIENT_MOST"] = "1.35"
         env["VICTORY_NAN_SCRUB"] = "1"
         env["VICTORY_D3D12_DRED"] = "light"
         env["VICTORY_THIN"] = "1"
@@ -667,8 +668,8 @@ def launch_game(cfg, developer):
         env["VICTORY_TEXTURE_STAGE_MB"] = "256"
         env["VICTORY_TEXTURE_CATCHUP"] = "1"
         env["VICTORY_TEXTURE_AWAY_MS"] = "3000"
+        env["VICTORY_HEAP_RECHECK_EVERY"] = "60"
         env["VICTORY_COMPOSE"] = "1"
-        env["VICTORY_PLANE_PREMULTIPLIED"] = "1"
         env["VICTORY_WINDOWS_BAR_MB"] = "2048"
         env["VICTORY_NO_WATCHDOG"] = "1"
 
@@ -678,8 +679,8 @@ def launch_game(cfg, developer):
     else:
         env["VICTORY_SKIP_PIPELINES"] = "none"
     env["VICTORY_BVH_BUILDER"] = "1" if bvh_builder else "0"
-    env["VICTORY_KB_LAYOUT"] = "azerty"
-    env["VICTORY_MOUSE_LOOK"] = "1"
+    env["VICTORY_KB_LAYOUT"] = "native"
+    env["VICTORY_GAMEPAD_MOUSE"] = "1"
 
     for env_key, opt_key in (
         ("VICTORY_D3D12_WARP", "warp"),
