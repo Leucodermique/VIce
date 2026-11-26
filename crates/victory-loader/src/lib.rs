@@ -24,8 +24,14 @@
 #[cfg(windows)]
 mod console_insn;
 mod crash;
+// LOCAL (victory-perf, via our wt5): VICTORY_RENDER_SCALE / VICTORY_OWN_UPSCALER / VICTORY_NO_WATCHDOG title patches.
+#[cfg(windows)]
+mod hooks;
 pub mod prepare;
+pub(crate) mod publish;
 pub mod resolve;
+#[cfg(all(windows, feature = "diagnostics"))]
+mod profile;
 #[cfg(all(windows, feature = "diagnostics"))]
 mod stacks;
 #[cfg(windows)]
@@ -34,6 +40,8 @@ mod threads;
 mod thunks;
 #[cfg(windows)]
 mod tls;
+#[cfg(windows)]
+pub mod write_sites;
 #[cfg(windows)]
 mod windows;
 
@@ -47,6 +55,8 @@ pub use prepare::{PrepareError, PreparedImage, prepare};
 pub use resolve::{ImportResolver, Provenance, Resolution};
 #[cfg(all(windows, feature = "diagnostics"))]
 pub use stacks::{dump_stacks, dump_stacks_on_schedule};
+#[cfg(all(windows, feature = "diagnostics"))]
+pub use profile::profile_on_schedule;
 #[cfg(windows)]
 pub use threads::disable_thread_calls;
 #[cfg(windows)]
@@ -60,15 +70,3 @@ pub use windows::{
 pub const DLL_PROCESS_ATTACH: u32 = 1;
 /// `DLL_PROCESS_DETACH`.
 pub const DLL_PROCESS_DETACH: u32 = 0;
-
-/// Makes `size` bytes at `base` writable and executable.
-///
-/// # Safety
-///
-/// `base` starts an image mapped in this process and `size` is its size.
-pub unsafe fn make_writable(base: *const core::ffi::c_void, size: usize) -> bool {
-    use windows_sys::Win32::System::Memory::{PAGE_EXECUTE_READWRITE, VirtualProtect};
-    let mut before = 0u32;
-    // SAFETY: the caller's contract.
-    unsafe { VirtualProtect(base, size, PAGE_EXECUTE_READWRITE, &mut before) != 0 }
-}
