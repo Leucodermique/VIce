@@ -365,7 +365,7 @@ class ScreenRecorder:
                         rx, ry = cur[0], cur[1]
                     region = {"left": int(rx), "top": int(ry), "width": int(rw), "height": int(rh)}
                     raw = np.asarray(sct.grab(region))
-                    bgr = raw[:, :, :3]  # BGRA -> BGR (zero-copy slice)
+                    bgr = cv2.cvtColor(raw, cv2.COLOR_BGRA2BGR)
                     if bgr.shape[1] != rw or bgr.shape[0] != rh:
                         bgr = cv2.resize(bgr, (rw, rh), interpolation=cv2.INTER_AREA)
 
