@@ -233,6 +233,10 @@ trait Source: Send {
     fn mouse(&mut self) -> Option<MouseState> {
         None
     }
+    /// Smoothed right-stick camera vector derived from captured 360 mouse deltas.
+    fn mouse_stick(&mut self) -> (f32, f32) {
+        (0.0, 0.0)
+    }
     /// Motor speeds: low frequency (left), high frequency (right).
     fn rumble(&mut self, slot: usize, low: u16, high: u16);
 }
@@ -304,10 +308,24 @@ fn fallback(keys: &[KeyState]) -> PadState {
     fallback_for(keyboard_layout(), keys)
 }
 
+/// Remaps a non-zero smoothed mouse axis past the console gamepad deadzone (~0.20)
+/// so subtle mouse movements immediately turn the camera while stopping cleanly at 0.
+fn stick_with_deadzone(v: f32) -> f32 {
+    const EPS: f32 = 0.012;
+    const FLOOR: f32 = 0.22;
+    let mag = v.abs();
+    if mag < EPS {
+        return 0.0;
+    }
+    let t = ((mag - EPS) / (1.0 - EPS)).clamp(0.0, 1.0);
+    (FLOOR + t * (1.0 - FLOOR)).copysign(v)
+}
+
 /// Maps focused mouse clicks (LMB -> RT fire/accelerate, RMB -> LT aim/brake,
-/// MMB -> R3 look behind) onto the stand-in gamepad for PC layouts while
-/// native `MOUSE_KIND` drives the 360 camera smoothly.
-fn mouse_click_pad(layout: KeyboardLayout, mouse: Option<MouseState>) -> PadState {
+/// MMB -> R3 look behind) and captured 360 mouse look (`stick` -> right stick)
+/// onto the stand-in gamepad for PC layouts, since console builds read the
+/// gameplay camera from `GAMEPAD_KIND` right stick.
+fn mouse_click_pad(layout: KeyboardLayout, mouse: Option<MouseState>, stick: (f32, f32)) -> PadState {
     if !matches!(layout, KeyboardLayout::Azerty | KeyboardLayout::Qwerty) {
         return PadState::default();
     }
@@ -318,6 +336,8 @@ fn mouse_click_pad(layout: KeyboardLayout, mouse: Option<MouseState>) -> PadStat
         buttons: if m.buttons & 0x4 != 0 { RIGHT_STICK } else { 0 },
         left_trigger: if m.buttons & 0x2 != 0 { 1.0 } else { 0.0 },
         right_trigger: if m.buttons & 0x1 != 0 { 1.0 } else { 0.0 },
+        right_x: stick_with_deadzone(stick.0),
+        right_y: stick_with_deadzone(stick.1),
         ..Default::default()
     }
 }
@@ -617,12 +637,15 @@ impl Hub {
 
     /// Reads the host once; device callbacks run on the calling thread.
     fn poll(&self) {
-        let (pads, keys, mouse) = {
+        let (pads, keys, mouse, stick) = {
             let mut source = lock(&self.source);
             let pads: [_; PADS] = std::array::from_fn(|slot| source.pad(slot));
-            (pads, source.keys(), source.mouse())
+            let keys = source.keys();
+            let mouse = source.mouse();
+            let stick = source.mouse_stick();
+            (pads, keys, mouse, stick)
         };
-        let events = self.state().poll(&self.devices, self.one_pad, pads, keys, mouse);
+        let events = self.state().poll(&self.devices, self.one_pad, pads, keys, mouse, stick);
         self.deliver(events);
     }
 
@@ -669,12 +692,13 @@ impl State {
         pads: [Option<PadState>; PADS],
         keys: Vec<KeyState>,
         mouse: Option<MouseState>,
+        stick: (f32, f32),
     ) -> Vec<Event> {
         let now = now();
         let mut events = std::mem::take(&mut self.pending);
         self.update(devices, MOUSE, mouse.map(Value::Mouse), now, &mut events);
         let layout = keyboard_layout();
-        let stand_in = merged(fallback(&keys), mouse_click_pad(layout, mouse));
+        let stand_in = merged(fallback(&keys), mouse_click_pad(layout, mouse, stick));
         // - Classic / Native: expose the real GameInput keyboard device (in
         //   Native mode, drop Enter from KEYBOARD_KIND so Enter -> A on the
         //   stand-in pad never double-submits menu selections).
@@ -1402,6 +1426,8 @@ mod host {
         f8_was_down: bool,
         previous_cursor: Option<(i32, i32)>,
         mouse: MouseState,
+        smooth_x: f32,
+        smooth_y: f32,
     }
 
     impl Default for Host {
@@ -1414,8 +1440,21 @@ mod host {
                 f8_was_down: false,
                 previous_cursor: None,
                 mouse: MouseState::default(),
+                smooth_x: 0.0,
+                smooth_y: 0.0,
             }
         }
+    }
+
+    fn mouse_sensitivity() -> f32 {
+        static SENS: LazyLock<f32> = LazyLock::new(|| {
+            std::env::var("VICTORY_MOUSE_SENS")
+                .ok()
+                .and_then(|v| v.trim().parse::<f32>().ok())
+                .filter(|v| *v > 0.001 && *v <= 1.0)
+                .unwrap_or(0.025)
+        });
+        *SENS
     }
 
     fn focused_window() -> Option<HWND> {
@@ -1492,6 +1531,8 @@ mod host {
                 LazyLock::new(|| std::env::var_os("VICTORY_GAMEPAD_MOUSE").is_none_or(|v| v != "0"));
             if !*ENABLED {
                 CURSOR_HIDDEN.store(false, Ordering::Relaxed);
+                self.smooth_x = 0.0;
+                self.smooth_y = 0.0;
                 return None;
             }
             let Some(window) = focused_window() else {
@@ -1499,6 +1540,8 @@ mod host {
                 self.mouse_primed = false;
                 self.previous_cursor = None;
                 self.mouse = MouseState::default();
+                self.smooth_x = 0.0;
+                self.smooth_y = 0.0;
                 return None;
             };
             // Toggle cursor lock / OS cursor hiding anytime with F8.
@@ -1508,6 +1551,8 @@ mod host {
                 self.mouse_captured = !self.mouse_captured;
                 self.mouse_primed = false;
                 self.previous_cursor = None;
+                self.smooth_x = 0.0;
+                self.smooth_y = 0.0;
                 tracing::info!(captured = self.mouse_captured, "native mouse capture toggled (F8)");
             }
             self.f8_was_down = f8_down;
@@ -1525,6 +1570,8 @@ mod host {
                 self.mouse_primed = false;
                 self.previous_cursor = None;
                 self.mouse = MouseState::default();
+                self.smooth_x = 0.0;
+                self.smooth_y = 0.0;
                 return None;
             }
 
@@ -1548,6 +1595,8 @@ mod host {
                     } else {
                         CURSOR_HIDDEN.store(false, Ordering::Relaxed);
                     }
+                    self.smooth_x = 0.0;
+                    self.smooth_y = 0.0;
                     (0, 0)
                 } else {
                     CURSOR_HIDDEN.store(true, Ordering::Relaxed);
@@ -1557,10 +1606,21 @@ mod host {
                         // SAFETY: keep cursor centered for smooth, unlimited 360-degree camera rotation.
                         unsafe { SetCursorPos(center_screen.x, center_screen.y) };
                     }
+                    let sens = mouse_sensitivity();
+                    self.smooth_x = (self.smooth_x * 0.76 + (dx as f32) * sens).clamp(-1.0, 1.0);
+                    self.smooth_y = (self.smooth_y * 0.76 - (dy as f32) * sens).clamp(-1.0, 1.0);
+                    if self.smooth_x.abs() < 0.012 {
+                        self.smooth_x = 0.0;
+                    }
+                    if self.smooth_y.abs() < 0.012 {
+                        self.smooth_y = 0.0;
+                    }
                     (dx, dy)
                 }
             } else {
                 CURSOR_HIDDEN.store(false, Ordering::Relaxed);
+                self.smooth_x = 0.0;
+                self.smooth_y = 0.0;
                 let (cursor, delta) = mouse_delta(
                     self.previous_cursor,
                     inside_client.then_some((point.x, point.y)),
@@ -1585,6 +1645,10 @@ mod host {
                 }
             }
             Some(self.mouse)
+        }
+
+        fn mouse_stick(&mut self) -> (f32, f32) {
+            (self.smooth_x, self.smooth_y)
         }
 
         fn rumble(&mut self, slot: usize, low: u16, high: u16) {
@@ -2110,11 +2174,15 @@ mod tests {
                 buttons: 0x7,
                 ..Default::default()
             }),
+            (0.05, -0.5),
         );
         assert_eq!(
             (clicks.right_trigger, clicks.left_trigger, clicks.buttons),
             (1.0, 1.0, RIGHT_STICK)
         );
+        assert!(clicks.right_x >= 0.22 && clicks.right_x < 0.35);
+        assert!(clicks.right_y < -0.5);
+        assert_eq!(stick_with_deadzone(0.005), 0.0);
         assert_eq!(
             mouse_click_pad(
                 KeyboardLayout::Classic,
@@ -2122,6 +2190,7 @@ mod tests {
                     buttons: 0x7,
                     ..Default::default()
                 }),
+                (0.5, 0.5),
             ),
             PadState::default()
         );
