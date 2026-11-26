@@ -710,13 +710,15 @@ impl State {
             KeyboardLayout::Native => keys.into_iter().filter(|k| k.virtual_key != 0x0D).collect(),
             KeyboardLayout::Azerty | KeyboardLayout::Qwerty => Vec::new(),
         };
+        let any_pad = pads.iter().any(Option::is_some);
+        #[cfg(windows)]
+        victory_gpu::set_real_pad_connected(any_pad);
         if one_pad {
             let pad = pads.into_iter().flatten().fold(stand_in, merged);
             self.update(devices, FALLBACK, Some(Value::Pad(pad)), now, &mut events);
             self.update(devices, KEYBOARD, Some(Value::Keys(reported_keys)), now, &mut events);
             return events;
         }
-        let any_pad = pads.iter().any(Option::is_some);
         for (slot, pad) in pads.into_iter().enumerate() {
             self.update(devices, slot, pad.map(Value::Pad), now, &mut events);
         }

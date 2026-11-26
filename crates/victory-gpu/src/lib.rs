@@ -94,6 +94,8 @@ mod watch;
 mod texback;
 
 #[cfg(windows)]
+pub use compose::set_real_pad_connected;
+#[cfg(windows)]
 pub use host::on_failure;
 
 /// Whether `switch` is on now, if it is one of those `VICTORY_AB` turns on and
