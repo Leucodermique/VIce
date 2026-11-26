@@ -100,7 +100,7 @@ const PC_AZERTY_BUTTONS: [(u8, u32); 22] = [
     (b'X', RIGHT_SHOULDER), // X -> Cover / RB
     (0xA2, LEFT_STICK),     // Left Ctrl -> Crouch / Stealth (L3)
     (b'C', RIGHT_STICK),    // C -> Look behind / Zoom (R3)
-    (b'E', A | RIGHT),      // E -> Interact / Talk (A + D-Pad Right)
+    (b'E', A),              // E -> Interact / Talk (A)
     (b'T', UP),             // T -> Phone (D-Pad Up)
     (0xA4, DOWN),           // Left Alt -> Character wheel / Minimap (D-Pad Down)
     (0x26, UP),             // Up arrow -> Phone / D-Pad Up
@@ -125,7 +125,7 @@ const PC_QWERTY_BUTTONS: [(u8, u32); 22] = [
     (b'X', RIGHT_SHOULDER),
     (0xA2, LEFT_STICK),
     (b'C', RIGHT_STICK),
-    (b'E', A | RIGHT),
+    (b'E', A),
     (b'T', UP),
     (0xA4, DOWN),
     (0x26, UP),
@@ -2160,14 +2160,15 @@ mod tests {
             key(0x20), // Space -> X (jump)
             key(b'F'), // F -> Y (vehicle)
             key(b'R'), // R -> B (reload)
-            key(b'E'), // E -> D-Pad Right (interact)
+            key(b'E'), // E -> A (interact / talk)
             key(0xA2), // Left Ctrl -> L3 (crouch)
             key(b'V'), // V -> View (camera)
         ];
         let pad = fallback_for(KeyboardLayout::Azerty, &keys);
         assert_eq!(pad.left_x, 1.0);
         assert_eq!(pad.left_y, 1.0);
-        assert_eq!(pad.buttons, A | X | Y | B | RIGHT | LEFT_STICK | VIEW);
+        assert_eq!(pad.buttons, A | X | Y | B | LEFT_STICK | VIEW);
+        assert_eq!(fallback_for(KeyboardLayout::Azerty, &[key(b'E')]).buttons, A);
         let back_left = fallback_for(KeyboardLayout::Azerty, &[key(b'S'), key(b'Q')]);
         assert_eq!((back_left.left_x, back_left.left_y), (-1.0, -1.0));
         let clicks = mouse_click_pad(
