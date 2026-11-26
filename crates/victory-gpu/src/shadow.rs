@@ -1482,9 +1482,21 @@ fn spin(there: impl Fn() -> bool) {
     }
 }
 
-/// How many threads are kept for [`wide`].
+/// How many threads are kept for [`wide`] (`VICTORY_WIDE_THREADS`, clamped to 2..=16).
 fn wide_threads() -> usize {
-    std::thread::available_parallelism().map_or(4, |n| n.get() / 4).clamp(2, 6)
+    static COUNT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *COUNT.get_or_init(|| {
+        let asked = std::env::var("VICTORY_WIDE_THREADS")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok());
+        let n = asked
+            .unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get() / 4).clamp(2, 6))
+            .clamp(2, 16);
+        if asked.is_some() {
+            tracing::info!(threads = n, "wide helper pool sized from VICTORY_WIDE_THREADS");
+        }
+        n
+    })
 }
 
 fn workers() -> &'static Workers {

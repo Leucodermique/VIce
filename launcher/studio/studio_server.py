@@ -619,7 +619,8 @@ def launch_game(cfg, developer):
         env["VICTORY_UPLOAD_AHEAD"] = "1"
         env["VICTORY_PIPELINE_WAIT_MS"] = "150"
         env["VICTORY_LATE_WAIT_LISTS"] = "512"
-        env["VICTORY_LAND_THREADS"] = "8"
+        env["VICTORY_WIDE_THREADS"] = "12"
+        env["VICTORY_LAND_THREADS"] = "10"
         env["VICTORY_LAND_SKIP"] = "1"
         env["VICTORY_DYNAMIC_SLOTS"] = "524288"
         env["VICTORY_RENDER_SCALE"] = "0.583"
@@ -663,7 +664,8 @@ def launch_game(cfg, developer):
         env["VICTORY_UPLOAD_AHEAD"] = "1"
         env["VICTORY_PIPELINE_WAIT_MS"] = "150"
         env["VICTORY_LATE_WAIT_LISTS"] = "512"
-        env["VICTORY_LAND_THREADS"] = "8"
+        env["VICTORY_WIDE_THREADS"] = "12"
+        env["VICTORY_LAND_THREADS"] = "10"
         env["VICTORY_LAND_SKIP"] = "1"
         env["VICTORY_DYNAMIC_SLOTS"] = "524288"
         env["VICTORY_RENDER_SCALE"] = "0.583"
@@ -724,7 +726,7 @@ def launch_game(cfg, developer):
             encoding="utf-8",
             errors="replace",
             startupinfo=si,
-            creationflags=subprocess.CREATE_NO_WINDOW,
+            creationflags=subprocess.CREATE_NO_WINDOW | subprocess.HIGH_PRIORITY_CLASS,
         )
         PROC = proc
         try:
