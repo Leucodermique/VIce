@@ -138,6 +138,11 @@ const PC_QWERTY_BUTTONS: [(u8, u32); 22] = [
 /// (read by `lifecycle::window_proc` on `WM_SETCURSOR` to hide the OS cursor).
 static CURSOR_HIDDEN: AtomicBool = AtomicBool::new(false);
 
+/// Incremented each time the title reads a gamepad state (`gamepad_state()`).
+/// Used to latch brief button/trigger clicks across slow frames (5-15 FPS) so
+/// quick fire (LMB), threaten (Space) and talk (E) taps are never missed.
+static GAMEPAD_READS: AtomicU64 = AtomicU64::new(0);
+
 pub(crate) fn cursor_hidden() -> bool {
     CURSOR_HIDDEN.load(Ordering::Relaxed)
 }
@@ -551,6 +556,84 @@ struct Slot {
     history: VecDeque<Ref>,
 }
 
+/// Holds brief button and trigger presses (e.g. quick LMB fire, Space threaten,
+/// E talk) until the title has actually read the gamepad at least twice (or
+/// 220 ms have elapsed), preventing missed inputs between slow frames (5-15 FPS).
+#[derive(Default)]
+struct InputLatch {
+    prev_buttons: u32,
+    prev_lt: bool,
+    prev_rt: bool,
+    /// Per button bit (0..14): `(reads_at_press, deadline_us)` while latched.
+    btn_latch: [Option<(u64, u64)>; 14],
+    lt_latch: Option<(u64, u64)>,
+    rt_latch: Option<(u64, u64)>,
+}
+
+impl InputLatch {
+    const MAX_HOLD_US: u64 = 220_000;
+    const MIN_READS: u64 = 2;
+
+    fn apply(&mut self, mut pad: PadState, now: u64, reads: u64) -> PadState {
+        let mut latched_btns = 0u32;
+        for bit_idx in 0..14u32 {
+            let mask = 1u32 << bit_idx;
+            let down = (pad.buttons & mask) != 0;
+            let was = (self.prev_buttons & mask) != 0;
+            let slot = &mut self.btn_latch[bit_idx as usize];
+            if down {
+                if !was {
+                    *slot = Some((reads, now.saturating_add(Self::MAX_HOLD_US)));
+                } else if let Some((_, deadline)) = slot {
+                    *deadline = now.saturating_add(Self::MAX_HOLD_US);
+                }
+            } else if let Some((start_reads, deadline)) = *slot {
+                if reads.saturating_sub(start_reads) < Self::MIN_READS && now < deadline {
+                    latched_btns |= mask;
+                } else {
+                    *slot = None;
+                }
+            }
+        }
+        pad.buttons |= latched_btns;
+        self.prev_buttons = pad.buttons & !latched_btns;
+
+        let lt_down = pad.left_trigger >= 0.5;
+        if lt_down {
+            if !self.prev_lt {
+                self.lt_latch = Some((reads, now.saturating_add(Self::MAX_HOLD_US)));
+            } else if let Some((_, deadline)) = &mut self.lt_latch {
+                *deadline = now.saturating_add(Self::MAX_HOLD_US);
+            }
+        } else if let Some((start_reads, deadline)) = self.lt_latch {
+            if reads.saturating_sub(start_reads) < Self::MIN_READS && now < deadline {
+                pad.left_trigger = 1.0;
+            } else {
+                self.lt_latch = None;
+            }
+        }
+        self.prev_lt = lt_down;
+
+        let rt_down = pad.right_trigger >= 0.5;
+        if rt_down {
+            if !self.prev_rt {
+                self.rt_latch = Some((reads, now.saturating_add(Self::MAX_HOLD_US)));
+            } else if let Some((_, deadline)) = &mut self.rt_latch {
+                *deadline = now.saturating_add(Self::MAX_HOLD_US);
+            }
+        } else if let Some((start_reads, deadline)) = self.rt_latch {
+            if reads.saturating_sub(start_reads) < Self::MIN_READS && now < deadline {
+                pad.right_trigger = 1.0;
+            } else {
+                self.rt_latch = None;
+            }
+        }
+        self.prev_rt = rt_down;
+
+        pad
+    }
+}
+
 struct State {
     slots: [Slot; DEVICES],
     callbacks: Vec<Registration>,
@@ -558,6 +641,7 @@ struct State {
     pending: Vec<Event>,
     /// Device callbacks running now: token and thread.
     running: Vec<(u64, ThreadId)>,
+    latch: InputLatch,
 }
 
 pub struct Hub {
@@ -605,6 +689,7 @@ impl Hub {
                 callbacks: Vec::new(),
                 pending: Vec::new(),
                 running: Vec::new(),
+                latch: InputLatch::default(),
             }),
             returned: Condvar::new(),
         }));
@@ -698,7 +783,12 @@ impl State {
         let mut events = std::mem::take(&mut self.pending);
         self.update(devices, MOUSE, mouse.map(Value::Mouse), now, &mut events);
         let layout = keyboard_layout();
-        let stand_in = merged(fallback(&keys), mouse_click_pad(layout, mouse, stick));
+        let raw_stand_in = merged(fallback(&keys), mouse_click_pad(layout, mouse, stick));
+        let stand_in = if matches!(layout, KeyboardLayout::Azerty | KeyboardLayout::Qwerty) {
+            self.latch.apply(raw_stand_in, now, GAMEPAD_READS.load(Ordering::Relaxed))
+        } else {
+            raw_stand_in
+        };
         // - Classic / Native: expose the real GameInput keyboard device (in
         //   Native mode, drop Enter from KEYBOARD_KIND so Enter -> A on the
         //   stand-in pad never double-submits menu selections).
@@ -1296,6 +1386,7 @@ extern "system" fn key_state(this: *const Reading, count: u32, out: *mut KeyStat
 extern "system" fn gamepad_state(this: *const Reading, out: *mut PadState) -> bool {
     match &reading(this).value {
         Value::Pad(state) if !out.is_null() => {
+            GAMEPAD_READS.fetch_add(1, Ordering::Relaxed);
             // SAFETY: checked non-null.
             unsafe { out.write(*state) };
             true
@@ -1454,7 +1545,7 @@ mod host {
                 .ok()
                 .and_then(|v| v.trim().parse::<f32>().ok())
                 .filter(|v| *v > 0.001 && *v <= 1.0)
-                .unwrap_or(0.025)
+                .unwrap_or(0.042)
         });
         *SENS
     }
@@ -1609,8 +1700,10 @@ mod host {
                         unsafe { SetCursorPos(center_screen.x, center_screen.y) };
                     }
                     let sens = mouse_sensitivity();
-                    self.smooth_x = (self.smooth_x * 0.76 + (dx as f32) * sens).clamp(-1.0, 1.0);
-                    self.smooth_y = (self.smooth_y * 0.76 - (dy as f32) * sens).clamp(-1.0, 1.0);
+                    // Slower 0.90 decay keeps camera / aiming motion alive across 8-15 FPS frames
+                    // (70-125 ms) so aiming at the clerk during the robbery stays responsive.
+                    self.smooth_x = (self.smooth_x * 0.90 + (dx as f32) * sens).clamp(-1.0, 1.0);
+                    self.smooth_y = (self.smooth_y * 0.90 - (dy as f32) * sens).clamp(-1.0, 1.0);
                     if self.smooth_x.abs() < 0.012 {
                         self.smooth_x = 0.0;
                     }
@@ -1635,15 +1728,15 @@ mod host {
             self.mouse.position_x += dx;
             self.mouse.position_y += dy;
             self.mouse.buttons = 0;
-            if inside_client || self.mouse_primed {
-                for (bit, vk) in [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON, VK_XBUTTON1, VK_XBUTTON2]
-                    .into_iter()
-                    .enumerate()
-                {
-                    // SAFETY: virtual-key state query.
-                    if unsafe { GetAsyncKeyState(i32::from(vk)) } < 0 {
-                        self.mouse.buttons |= 1 << bit;
-                    }
+            // Always read mouse clicks while the game window is focused so LMB (fire)
+            // and RMB (aim) never drop even near window edges or when F8 is toggled.
+            for (bit, vk) in [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON, VK_XBUTTON1, VK_XBUTTON2]
+                .into_iter()
+                .enumerate()
+            {
+                // SAFETY: virtual-key state query.
+                if unsafe { GetAsyncKeyState(i32::from(vk)) } < 0 {
+                    self.mouse.buttons |= 1 << bit;
                 }
             }
             Some(self.mouse)
@@ -2197,6 +2290,37 @@ mod tests {
             ),
             PadState::default()
         );
+    }
+
+    #[test]
+    fn azerty_latch_keeps_quick_fire_threaten_and_talk_clicks_across_slow_frames() {
+        let mut latch = InputLatch::default();
+        let aim = PadState {
+            left_trigger: 1.0,
+            ..Default::default()
+        };
+        // Player holds RMB (LT) and does a brief 50ms tap of LMB (RT fire) + Space (X threaten) + E (A talk).
+        let pressed = PadState {
+            buttons: X | A,
+            left_trigger: 1.0,
+            right_trigger: 1.0,
+            ..Default::default()
+        };
+        let p0 = latch.apply(pressed, 10_000, 100);
+        assert_eq!((p0.buttons, p0.left_trigger, p0.right_trigger), (X | A, 1.0, 1.0));
+        // 50ms later player releases LMB, Space and E while still holding RMB, before the game reads a frame.
+        let p1 = latch.apply(aim, 60_000, 100);
+        assert_eq!((p1.buttons, p1.left_trigger, p1.right_trigger), (X | A, 1.0, 1.0));
+        // After 1 game read, still latched for reliability.
+        let p2 = latch.apply(aim, 100_000, 101);
+        assert_eq!((p2.buttons, p2.left_trigger, p2.right_trigger), (X | A, 1.0, 1.0));
+        // After 2 game reads, released cleanly while RMB aim remains held.
+        let p3 = latch.apply(aim, 140_000, 102);
+        assert_eq!((p3.buttons, p3.left_trigger, p3.right_trigger), (0, 1.0, 0.0));
+        // Safety deadline (220ms) also releases even with 0 reads.
+        let _ = latch.apply(pressed, 300_000, 102);
+        let p4 = latch.apply(aim, 600_000, 102);
+        assert_eq!((p4.buttons, p4.left_trigger, p4.right_trigger), (0, 1.0, 0.0));
     }
 
     #[test]

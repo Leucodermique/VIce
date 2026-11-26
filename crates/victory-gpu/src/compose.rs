@@ -84,9 +84,17 @@ bool is_white_glyph(float4 c) {
     return c.a > 0.78 && l > 0.70 && (hi - lo) < 0.22;
 }
 
+// Also matches GTA VI's disabled/dimmed grey circular prompt buttons (e.g. inactive "PARLER (A)").
+bool is_prompt_disc(float4 c) {
+    float l = dot(c.rgb, LUMA);
+    float hi = max(c.r, max(c.g, c.b));
+    float lo = min(c.r, min(c.g, c.b));
+    return c.a > 0.72 && l > 0.36 && (hi - lo) < 0.16;
+}
+
 bool is_dark_ink(float4 c) {
     float l = dot(c.rgb, LUMA);
-    return c.a > 0.50 && l < 0.48;
+    return c.a > 0.50 && l < 0.32;
 }
 
 // 4: A (green), 5: B (red), 6: X (blue), 7: Y (yellow), -1: none
@@ -114,7 +122,7 @@ int classify_white_circle_letter(float2 p, float scale) {
             if (i * i + j * j > 38) continue;
             float4 s = sample_ui_px(p + float2(float(i), float(j)) * scale);
             float l = dot(s.rgb, LUMA);
-            if (s.a > 0.50 && l < 0.55) {
+            if (s.a > 0.50 && l < 0.32) {
                 found++;
                 minx = min(minx, float(i));
                 maxx = max(maxx, float(i));
@@ -325,8 +333,8 @@ void detect_hits(uint3 tid : SV_DispatchThreadID) {
             }
         }
 
-        // A3) Monochrome white circular button (PARLER (A), MENACER (X), (B), (Y), (R)):
-        // White perimeter at radius ~10px, transparent outside at ~17px, dark letter inside.
+        // A3) Monochrome white or dimmed-grey circular button (PARLER (A), MENACER (X), (B), (Y), (R)):
+        // Neutral bright/grey perimeter at radius ~10px, transparent outside at ~17px, dark letter inside.
         bool vert_clear =
             sample_ui_px(p + float2(0.0, -17.0 * scale)).a < 0.18 &&
             sample_ui_px(p + float2(0.0,  17.0 * scale)).a < 0.18;
@@ -339,10 +347,15 @@ void detect_hits(uint3 tid : SV_DispatchThreadID) {
             if (sample_ui_px(p + float2( d_off,  d_off)).a < 0.18) diag_clear++;
             if (diag_clear >= 3u) {
                 uint ring10 = 0u;
+                float ring_luma = 0.0;
                 for (uint k = 0u; k < 12u; k++) {
                     float ang = float(k) * (TWO_PI / 12.0);
                     float2 dir = float2(cos(ang), sin(ang));
-                    if (is_white_glyph(sample_ui_px(p + dir * (10.0 * scale)))) ring10++;
+                    float4 rs = sample_ui_px(p + dir * (10.0 * scale));
+                    if (is_prompt_disc(rs)) {
+                        ring10++;
+                        ring_luma += dot(rs.rgb, LUMA);
+                    }
                 }
                 if (ring10 >= 10u) {
                     uint dark_cnt = 0u;
@@ -355,7 +368,8 @@ void detect_hits(uint3 tid : SV_DispatchThreadID) {
                     }
                     if (dark_cnt >= 2u && dark_cnt <= 7u) {
                         int icon = classify_white_circle_letter(p, scale);
-                        push_candidate(p, uint(icon), 1u, float(ring10) / 12.0);
+                        uint style = (ring_luma / float(ring10) < 0.65) ? 3u : 1u; // 3 = dimmed inactive button
+                        push_candidate(p, uint(icon), style, float(ring10) / 12.0);
                         return;
                     }
                 }
@@ -511,8 +525,8 @@ void merge_hits() {
         float cy = sy / max(sw, 1.0);
         uint icon = a.z & 0xFFu;
         uint style = (a.z >> 8) & 0xFFu;
-        // style 0: popup box icon (15px), style 1: floating circle (15px), style 2: inside hold ring (12px)
-        float rad = (style == 2u) ? 12.0 : 15.0;
+        // style 0: popup box icon (15px), style 1/3: floating circle (15px), style 2: inside hold ring (14.5px to fully cover LT)
+        float rad = (style == 2u) ? 14.5 : 15.0;
         uint hw = uint(rad * scale + 0.5);
         uint hh = uint(rad * scale + 0.5);
         uint dst = (261u + out_n * 6u) * 4u;
@@ -565,14 +579,16 @@ void main(uint3 id : SV_DispatchThreadID) {
 
             float2 rel = (float2(id.xy) - cpos) / max(half_sz, float2(1.0, 1.0));
             if (abs(rel.x) > 1.0 || abs(rel.y) > 1.0) continue;
-            // For ring-hold prompt (style 2), keep GTA VI's outer white hold ring intact!
-            if (style == 2u && dot(rel, rel) > 1.05) continue;
+            // For ring-hold prompt (style 2), keep GTA VI's outer white hold ring (r=18px) intact
+            // while fully clearing the old [LT] inside r<=14.5px!
+            if (style == 2u && dot(rel, rel) > 1.0) continue;
 
             float2 tile_uv = rel * 0.5 + 0.5;
             float u_atlas = (float(icon) + tile_uv.x) / 10.0;
             float2 ag = atlas.SampleLevel(linear_clamp, float2(u_atlas, tile_uv.y), 0);
             float glyph = ag.x;
-            float3 fg = lerp(float3(0.06, 0.06, 0.08), float3(0.97, 0.97, 0.97), ag.y);
+            float3 white_col = (style == 3u) ? float3(0.54, 0.54, 0.56) : float3(0.97, 0.97, 0.97);
+            float3 fg = lerp(float3(0.06, 0.06, 0.08), white_col, ag.y);
 
             float4 bg;
             if (style == 0u) {

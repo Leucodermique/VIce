@@ -179,8 +179,9 @@ void keep(uint3 at : SV_DispatchThreadID) {
         uint2 p = uint2((float2(at.xy) + (float2(x, y) + 0.5) / 5.0) * float2(w, h) / float2(CX, CY));
         float3 c = max(radiance[p], 0.0);
         c = any(isnan(c)) || any(isinf(c)) ? 0.0 : c;
-        // Lamps and glints count, but not for everything.
-        sum += c / max(1.0, dot(c, LUMA) / 20.0);
+        // Lamps and glints count, but clamp spikes tightly so a single flash
+        // never poisons the slow room mean for 5-6 seconds.
+        sum += c / max(1.0, dot(c, LUMA) / 4.0);
     }
     cells[at.y * CX + at.x] = float4(sum / 25.0, 1.0);
 }
@@ -191,7 +192,16 @@ void mean() {
     for (uint i = 0; i < CELLS; i++) sum += cells[i].rgb;
     float4 was = cells[CELLS];
     float3 now = sum / CELLS;
-    cells[CELLS] = float4(was.a > 0.0 ? lerp(was.rgb, now, follow) : now, 1.0);
+    if (any(isnan(now)) || any(isinf(now))) now = 0.0;
+    float now_l = dot(now, LUMA);
+    if (now_l > 3.5) now *= 3.5 / now_l;
+    if (was.a > 0.0 && !any(isnan(was.rgb)) && !any(isinf(was.rgb))) {
+        // Rise gently and reject sudden full-screen flash spikes; recover 6x faster when dimming.
+        float3 capped = min(now, was.rgb * 1.4 + 0.25);
+        float rate = dot(capped, LUMA) < dot(was.rgb, LUMA) ? max(follow * 6.0, 0.25) : follow;
+        now = lerp(was.rgb, capped, rate);
+    }
+    cells[CELLS] = float4(now, 1.0);
 }
 #endif
 
@@ -253,7 +263,7 @@ void clear_air(uint3 at : SV_DispatchThreadID) {
     uint at0 = (q.y * PX + q.x) * 3;
     float3 seen_there = float3(points[at0].w, points[at0 + 1].w, points[at0 + 2].w);
     float far = float(at.z) / float(d);
-    float cap = air * lerp(dot(cells[CELLS].rgb, LUMA), dot(seen_there, LUMA), far);
+    float cap = min(air * lerp(dot(cells[CELLS].rgb, LUMA), dot(seen_there, LUMA), far), 2.2);
     float3 c = scattered[at];
     // LOCAL: a NaN or infinity in the air is summed along every view ray
     // through it: black or white patches floating in the room.
@@ -335,13 +345,20 @@ void raise(uint3 at : SV_DispatchThreadID) {
     found = all + 1.2 * float3(dot(sr.xyz, n), dot(sg.xyz, n), dot(sb.xyz, n)) / sum;
     found = clamp(found, 0.2 * all, 2.5 * all);
     found = lerp(found, cells[CELLS].rgb, 0.2) * level * open;
+    if (any(isnan(found)) || any(isinf(found))) found = 0.0;
+    float found_l = dot(found, LUMA);
+    if (found_l > 3.5) found *= 3.5 / found_l;
     float3 was = unpack(light[p]);
+    if (any(isnan(was)) || any(isinf(was))) was = 0.0;
     // What the program left counts as far as it can be true: the sky's light
-    // outdoors, not the blocks of other memory.
-    float top = max(dot(found, LUMA) * most, 1e-6);
+    // outdoors, not the blocks of other memory or full-screen HDR flashes.
+    float top = clamp(dot(found, LUMA) * most, 1e-6, 5.0);
     float has = dot(was, LUMA);
     was *= min(1.0, top / max(has, 1e-6));
-    light[p] = pack(max(was, found));
+    float3 final_l = max(was, found);
+    float fl = dot(final_l, LUMA);
+    if (fl > 5.0) final_l *= 5.0 / fl;
+    light[p] = pack(final_l);
 }
 #endif
 "#;
