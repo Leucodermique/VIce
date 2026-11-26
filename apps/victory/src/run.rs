@@ -38,6 +38,32 @@ pub fn run(
     drop(original);
     victory_hle::runtime::set_main_image(image.base());
     victory_hle::runtime::set_image_path(image.base(), exe);
+    // `VICTORY_RESOLUTION=1920x1080`: cap the title's resolution ladder so its
+    // frame is the display's size instead of the console's 4K.
+    let resolution = std::env::var("VICTORY_RESOLUTION").ok().and_then(|text| {
+        let (w, h) = text.split_once('x')?;
+        Some((w.trim().parse().ok()?, h.trim().parse().ok()?))
+    });
+    if let Some((width, height)) = resolution {
+        let base = image.base();
+        let size = image.info().size_of_image as usize;
+        // SAFETY: the image is mapped for `size` bytes; the cap rewrites it.
+        let writable =
+            unsafe { victory_loader::make_writable(base as *const core::ffi::c_void, size) };
+        if writable {
+            // SAFETY: writable for `size` bytes, as above.
+            let changed =
+                unsafe { victory_game::output::cap_ladder(base as *mut u8, size, width, height) };
+            println!("resolution     {changed} ladder entry(ies) capped to {width}x{height}");
+            if let Some(at) = unsafe { victory_game::output::assert_site(base as usize, size) } {
+                // SAFETY: `at` lies inside the image, made writable above.
+                unsafe { std::ptr::write_bytes(at as *mut u8, 0x90, 1) };
+                println!("resolution     int3 at {at:#x} patched to nop");
+            }
+        } else {
+            eprintln!("resolution     the image could not be made writable; no patch");
+        }
+    }
     println!(
         "mapped at      {:#x} (preferred {:#x})",
         image.base(),
@@ -73,6 +99,11 @@ pub fn run(
     println!("console        {}", victory_hle::console::current().name());
     let dlls = victory_loader::load_title_dlls(image.info(), title_dir, &images, &wanted)?;
     for (name, dll) in &dlls {
+        if name.eq_ignore_ascii_case(victory_hle::modules::ffx::LOADER)
+            && let Some(real) = dll.export("ffxDispatch")
+        {
+            victory_hle::modules::ffx::set_real_dispatch(real);
+        }
         println!("title dll      {name} at {:#x}", dll.base());
         victory_hle::runtime::set_image_path(dll.base(), &title_dir.join(name));
     }
@@ -101,7 +132,27 @@ pub fn run(
         show(name, dll.bind_imports(&with_dlls, policy)?);
     }
     let exe_name = exe.file_name().unwrap_or_default().to_string_lossy();
-    show(&exe_name, image.bind_imports(&with_dlls, policy)?);
+    // The upscale dispatch is ours (`victory_hle::modules::ffx`); the rest of
+    // that DLL is the title's own.
+    struct TakeDispatch<'a>(&'a dyn victory_loader::ImportResolver);
+    impl victory_loader::ImportResolver for TakeDispatch<'_> {
+        fn resolve(
+            &self,
+            dll: &str,
+            symbol: &victory_pe::ImportSymbol,
+        ) -> victory_loader::Resolution {
+            let ours = dll.eq_ignore_ascii_case(victory_hle::modules::ffx::LOADER)
+                && matches!(symbol, victory_pe::ImportSymbol::Name { name, .. } if name == "ffxDispatch");
+            if ours {
+                return victory_loader::Resolution::Found {
+                    address: victory_hle::modules::ffx::dispatch_address(),
+                    provenance: victory_loader::Provenance::Hle,
+                };
+            }
+            self.0.resolve(dll, symbol)
+        }
+    }
+    show(&exe_name, image.bind_imports(&TakeDispatch(&with_dlls), policy)?);
     if !execute {
         println!("not executing (pass --execute to start the title)");
         return Ok(());

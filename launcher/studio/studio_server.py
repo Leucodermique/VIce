@@ -565,104 +565,130 @@ def launch_game(cfg, developer):
     bvh_builder = bool(cfg.get("bvhBuilder", False))
 
     if fast_gpu:
-        # RTX 4070 Laptop 8 GB / 16 GB RAM — Maximum Visual Correctness & Stability profile:
-        # - VICTORY_SHADER_OPT=0 (#310): eliminates NVIDIA black blocks, face blotches, and smeared streaks at equal FPS.
-        # - VICTORY_BVH_HOLD=1 (#1088) + VICTORY_AMBIENT=0.55: stops 15.8 RT walk dispatches/frame from tracing garbage
-        #   unbuilt memory (fixes blown-out white reflections on bar/tables/floor & pink blotches), while depth-AO ambient
-        #   keeps shadowed areas cleanly lit.
-        # - VICTORY_TEXTURE_NO_WAIT=0: eliminates the 39,001 half-written rainbow-noise textures (waitress face).
-        # - VICTORY_SECTION_MB=2 (#1089) + VICTORY_FILL_WAIT=1 (#168) + VICTORY_PAGE_WRITES=all: keeps diner walls/ceiling present.
-        # - CARD_BUFFERS_MB=640 + MIN_MB=1 (no MIN_KB=256, #1163): keeps all 258 MB of >=1 MiB buffers in VRAM.
-        # - DROP_MIPS=1 + IDLE_MS=8000 (with unheld_since #1080) + SPILL=30%: crisp textures with zero "no room for more".
-        env.pop("VICTORY_LEVELS_ON_DEMAND", None)
-        env.pop("VICTORY_COPY_PLAIN", None)
-        env.pop("VICTORY_AUTO_QUARTER", None)
-        env.pop("VICTORY_DISK_CORES", None)
-        env.pop("VICTORY_CARD_BUFFERS_MIN_KB", None)
-        env.pop("VICTORY_SHADER_OPT", None)
+        # RTX 4070 Laptop 8 GB / 16 GB RAM — VIce on fxceless e4245f3 + 8 GB/1080p/Thin-LTO profile:
+        # - Every measured RTX 4070 speedup from fxceless e4245f3 (2026-11-26):
+        #   * VICTORY_HEAP_WORKER=1 (+40% world FPS, offloads texture pass to dedicated thread)
+        #   * VICTORY_LOOKUP_CACHE=1 (-14 ms/frame CPU, lock-free buffer lookup)
+        #   * VICTORY_SETTLE_ROOM=1 (-11.5 ms/frame CPU, more room before flight settle)
+        #   * VICTORY_PARALLEL_REFRESH=1 (-9 ms/frame CPU, parallel texture checks)
+        #   * VICTORY_CARD_HASH_WIDE=1 (-10 ms/frame GPU, 64-thread card hashing)
+        #   * VICTORY_CARD_HASH_LEN=1 (-25% hash list cost) + VICTORY_CARD_SYNC_BATCH=1 (3-step sync)
+        #   * VICTORY_DIRTY_4K=1 (-45% dirty copy bytes) + VICTORY_GATHER_SEGMENTS=1
+        #   * VICTORY_ABSENT_ONCE=1 + VICTORY_ABSENT_MS=told (skips repeated unmapped queries)
+        # - Calibrated for 8 GB VRAM / 16 GB RAM (soldsawn + fxceless run 295):
+        #   * 1920x1080 cap + VICTORY_TEXTURE_DROP_MIPS=2 (keeps 8 GB VRAM comfortably under budget, UI mip_levels<5 kept crisp)
+        #   * CARD_BUFFERS_MB=1024 + CARD_BUFFERS_MIN_KB=64 (-18 ms GPU by keeping small buffers in VRAM)
+        #   * CARD_WINDOWS_MB=512 (leaves maximum VRAM for world textures on 8 GB cards)
+        # - Visual correctness & stability:
+        #   * VICTORY_BVH_HOLD=1 + VICTORY_AMBIENT=0.55 (lit shadows, zero unbuilt-RT artifacts)
+        #   * VICTORY_TEXTURE_BACK=1 (water reflections & boat buoyancy)
+        #   * VICTORY_SECTION_MB=2 (#1089, zero MiRebuildLargePages stalls / missing walls)
+        #   * VICTORY_HEAP_RECHECK_EVERY=60 + VICTORY_TEXTURE_NO_WAIT=0 (fixes black/red/corrupted faces)
+        #   * VICTORY_D3D12_DRED=faults (near-zero overhead crash breadcrumbs)
+        for stale in (
+            "VICTORY_SHADER_OPT",
+            "VICTORY_CARD_BUFFERS_MIN_MB",
+            "VICTORY_PAGE_WRITES",
+            "VICTORY_AUTO_QUARTER",
+            "VICTORY_DISK_CORES",
+        ):
+            env.pop(stale, None)
         if console == "series-x":
             env["VICTORY_RESOLUTION"] = "1920x1080"
             env["VICTORY_DISPLAY_MODE"] = "1920x1080"
         else:
             env.pop("VICTORY_RESOLUTION", None)
             env.pop("VICTORY_DISPLAY_MODE", None)
-        env["VICTORY_BVH_HOLD"] = "0" if bvh_builder else "1"
-        env["VICTORY_AMBIENT"] = "off" if bvh_builder else "0.55"
-        env["VICTORY_TEXTURE_DROP_MIPS"] = "1"
-        env["VICTORY_TEXTURE_BACK"] = "1"
-        env["VICTORY_RELAY"] = "2"
-        env["VICTORY_FILL_WAIT"] = "1"
-        env["VICTORY_SECTION_MB"] = "2"
+
+        # Core fxceless e4245f3 measured speedups
+        env["VICTORY_LEVELS_ON_DEMAND"] = "1"
         env["VICTORY_ASYNC_SUBMIT"] = "1"
         env["VICTORY_ASYNC_PRESENT"] = "1"
-        env["VICTORY_LAND_ASIDE"] = "1"
-        env["VICTORY_HEAP_RESCAN_SPREAD"] = "1"
         env["VICTORY_QUEUE2"] = "1"
+        env["VICTORY_RELAY"] = "2"
         env["VICTORY_INDIRECT_WINDOW"] = "1"
-        env["VICTORY_INDIRECT_WINDOW_DRAWS"] = "1"
         env["VICTORY_INDIRECT_GATHER"] = "1"
-        env["VICTORY_CLAMP_WAITS"] = "0"
+        env["VICTORY_GATHER_SEGMENTS"] = "1"
+        env["VICTORY_COPY_PLAIN"] = "1"
         env["VICTORY_JOIN_PARTS"] = "1"
         env["VICTORY_BACK_OWN_VIEW"] = "1"
-        env["VICTORY_ALIAS_ONCE"] = "1"
-        env["VICTORY_SKIP_WC_COMPARE"] = "0"
-        env["VICTORY_WIDE_TEXTURES"] = "1"
-        env["VICTORY_GUARD_HOLES_FRAME"] = "1"
-        env["VICTORY_HEAP_WORKER"] = "0"
-        env["VICTORY_XMEM_PERSISTENT_VIEW"] = "1"
-        env["VICTORY_TEXTURE_NO_WAIT"] = "0"
-        env["VICTORY_TEXTURE_CATCHUP"] = "1"
+        env["VICTORY_MERGE_GAP"] = "64"
+        env["VICTORY_MERGE_RUNS"] = "4096"
+        env["VICTORY_STAGING_POOL"] = "0"
+        env["VICTORY_HEAP_WORKER"] = "1"
+        env["VICTORY_LOOKUP_CACHE"] = "1"
+        env["VICTORY_SETTLE_ROOM"] = "1"
+        env["VICTORY_PARALLEL_REFRESH"] = "1"
+        env["VICTORY_CARD_HASH_WIDE"] = "1"
+        env["VICTORY_CARD_HASH_LEN"] = "1"
+        env["VICTORY_CARD_SYNC_BATCH"] = "1"
+        env["VICTORY_CARD_REHASH_RUNS"] = "1"
+        env["VICTORY_DIRTY_4K"] = "1"
+        env["VICTORY_ABSENT_ONCE"] = "1"
+        env["VICTORY_ABSENT_MS"] = "told"
+        env["VICTORY_WIDE_BACK"] = "1"
+
+        # 8 GB VRAM / 16 GB RAM budget tuning
+        env["VICTORY_TEXTURE_DROP_MIPS"] = "2"
+        env["VICTORY_CARD_BUFFERS_MB"] = "1024"
+        env["VICTORY_CARD_BUFFERS_MIN_KB"] = "64"
+        env["VICTORY_CARD_WINDOWS_MB"] = "512"
+        env["VICTORY_CARD_ROOM_FOR_TARGETS_MB"] = "768"
+        env["VICTORY_TEXTURE_ROOM_PERCENT"] = "94"
         env["VICTORY_TEXTURE_STAGE_MB"] = "256"
         env["VICTORY_TEXTURE_STAGE_MS"] = "200"
         env["VICTORY_EARLY_TEXTURES_MS"] = "200"
         env["VICTORY_BAKE_TEXTURES_MS"] = "4000"
-        env["VICTORY_WIDE_BACK"] = "1"
-        env["VICTORY_CARD_REHASH_RUNS"] = "1"
-        env["VICTORY_LATE_WAIT_LISTS"] = "512"
-        env["VICTORY_CARD_BUFFERS_MIN_MB"] = "1"
-        env["VICTORY_CARD_BUFFERS_MB"] = "640"
-        env["VICTORY_CARD_WINDOWS_MB"] = "384"
-        env["VICTORY_WINDOW_KB"] = "1024"
-        env["VICTORY_WINDOW_TAILS"] = "1"
-        env["VICTORY_TEXTURE_ROOM_PERCENT"] = "94"
-        env["VICTORY_TEXTURE_SPILL"] = "1"
-        env["VICTORY_TEXTURE_SPILL_PERCENT"] = "30"
-        env["VICTORY_TEXTURE_IDLE_MS"] = "8000"
-        env["VICTORY_CARD_ROOM_FOR_TARGETS_MB"] = "1024"
-        env["VICTORY_PIPELINE_COMMIT_MB"] = "768"
+        env["VICTORY_TEXTURE_CATCHUP"] = "1"
         env["VICTORY_PIPELINE_WAIT_MS"] = "500"
+
+        # Visual fidelity & stability
+        env["VICTORY_BVH_HOLD"] = "0" if bvh_builder else "1"
+        env["VICTORY_AMBIENT"] = "off" if bvh_builder else "0.55"
+        env["VICTORY_TEXTURE_BACK"] = "1"
+        env["VICTORY_TEXTURE_NO_WAIT"] = "0"
+        env["VICTORY_HEAP_RECHECK_EVERY"] = "60"
+        env["VICTORY_FILL_WAIT"] = "1"
+        env["VICTORY_SECTION_MB"] = "2"
+        env["VICTORY_FPS_COUNTER"] = "1"
+        env["VICTORY_D3D12_DRED"] = "faults"
     else:
-        env.pop("VICTORY_RESOLUTION", None)
-        env.pop("VICTORY_TEXTURE_DROP_MIPS", None)
+        for opt in (
+            "VICTORY_RESOLUTION",
+            "VICTORY_DISPLAY_MODE",
+            "VICTORY_TEXTURE_DROP_MIPS",
+            "VICTORY_HEAP_WORKER",
+            "VICTORY_LOOKUP_CACHE",
+            "VICTORY_SETTLE_ROOM",
+            "VICTORY_PARALLEL_REFRESH",
+            "VICTORY_CARD_HASH_WIDE",
+            "VICTORY_CARD_SYNC_BATCH",
+            "VICTORY_DIRTY_4K",
+            "VICTORY_GATHER_SEGMENTS",
+            "VICTORY_CARD_BUFFERS_MIN_KB",
+        ):
+            env.pop(opt, None)
         env["VICTORY_LEVELS_ON_DEMAND"] = "1"
         env["VICTORY_RELAY"] = "0"
         env["VICTORY_INDIRECT_WINDOW"] = "0"
-        env["VICTORY_INDIRECT_WINDOW_DRAWS"] = "0"
         env["VICTORY_INDIRECT_GATHER"] = "0"
-        env["VICTORY_CLAMP_WAITS"] = "1"
         env["VICTORY_JOIN_PARTS"] = "0"
         env["VICTORY_BACK_OWN_VIEW"] = "0"
-        env["VICTORY_ALIAS_ONCE"] = "0"
-        env["VICTORY_SKIP_WC_COMPARE"] = "0"
-        env["VICTORY_WIDE_TEXTURES"] = "0"
-        env["VICTORY_XMEM_PERSISTENT_VIEW"] = "0"
         env["VICTORY_TEXTURE_CATCHUP"] = "0"
         env["VICTORY_TEXTURE_STAGE_MS"] = "24"
-        env["VICTORY_WIDE_BACK"] = "0"
         env["VICTORY_CARD_REHASH_RUNS"] = "1"
-        env["VICTORY_LATE_WAIT_LISTS"] = "128"
         env["VICTORY_CARD_BUFFERS_MIN_MB"] = "16"
         env["VICTORY_CARD_BUFFERS_MB"] = "512"
         env["VICTORY_CARD_WINDOWS_MB"] = "0"
         env["VICTORY_TEXTURE_ROOM_PERCENT"] = "94"
-        env["VICTORY_TEXTURE_SPILL_PERCENT"] = "0" if console == "series-s" else "10"
         env["VICTORY_CARD_ROOM_FOR_TARGETS_MB"] = "1024" if console == "series-s" else "1536"
-        env["VICTORY_PIPELINE_COMMIT_MB"] = "768"
         env["VICTORY_PIPELINE_WAIT_MS"] = "500"
+        env["VICTORY_SECTION_MB"] = "2"
 
     env["VICTORY_BVH_BUILDER"] = "1" if bvh_builder else "0"
-    env["VICTORY_PAGE_WRITES"] = "all" if dstorage_notify else "0"
-    env["VICTORY_DSTORAGE_NOTIFY"] = "1" if dstorage_notify else "0"
+    if not dstorage_notify:
+        env["VICTORY_PAGE_WRITES"] = "0"
+    env.pop("VICTORY_DSTORAGE_NOTIFY", None)
 
     for env_key, opt_key in (
         ("VICTORY_D3D12_WARP", "warp"),
