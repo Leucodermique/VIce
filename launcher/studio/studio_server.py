@@ -601,8 +601,8 @@ def launch_game(cfg, developer):
 
     if fast_gpu:
         # VIce Laptop / Low-VRAM Profile (8 GB VRAM / 16 GB RAM, Native + Smooth Motion):
-        # - VICTORY_WINDOWS_BAR_MB=0 + WINDOW_KB=1024 + WINDOW_TAILS=1: frees +2 GB VRAM (stops
-        #   PCIe VRAM thrashing at 7.1/7.0 GB) while shrinking shared RAM windows by ~1.7 GB.
+        # - VICTORY_WINDOWS_BAR_MB=1024 + WINDOW_KB=1024 + WINDOW_TAILS=1 + AWAY_MS=3000:
+        #   balances 8 GB VRAM (auto-capped at 80% budget) & 16 GB RAM (prevents 0x8007000E OOM).
         # - VICTORY_PORT_CONSTANTS=1: keeps the 174 MB 32-bit graphics heap in place (zero copy/hash).
         # - VICTORY_WC_NO_BACK=1: skips ~16 ms/frame write-combined copy-back & GPU compares.
         # - VICTORY_EARLY_DEPTH=1: fixes glass-behind-hair depth/motion-vector bleed + cuts overdraw.
@@ -629,7 +629,7 @@ def launch_game(cfg, developer):
         env["VICTORY_JOIN_PARTS"] = "8"
         env["VICTORY_UPLOAD_AHEAD"] = "1"
         env["VICTORY_PIPELINE_WAIT_MS"] = "250"
-        env["VICTORY_LATE_WAIT_LISTS"] = "512"
+        env["VICTORY_LATE_WAIT_LISTS"] = "128"
         env["VICTORY_WIDE_THREADS"] = "12"
         env["VICTORY_LAND_THREADS"] = "10"
         env["VICTORY_LAND_SKIP"] = "1"
@@ -645,14 +645,14 @@ def launch_game(cfg, developer):
         env["VICTORY_TEXTURE_DROP_MIPS"] = "1"
         env["VICTORY_TEXTURE_STAGE_MB"] = "192"
         env["VICTORY_TEXTURE_CATCHUP"] = "1"
-        env["VICTORY_TEXTURE_AWAY_MS"] = "8000"
+        env["VICTORY_TEXTURE_AWAY_MS"] = "3000"
         env["VICTORY_EARLY_TEXTURES_MS"] = "16"
         env["VICTORY_BAKE_TEXTURES_MS"] = "2500"
         env["VICTORY_HEAP_RECHECK_EVERY"] = "30"
         env["VICTORY_COMPOSE"] = "1"
         env["VICTORY_SHARPEN"] = "0.18"
         env["VICTORY_PC_PROMPTS"] = "1"
-        env["VICTORY_WINDOWS_BAR_MB"] = "0"
+        env["VICTORY_WINDOWS_BAR_MB"] = "1024"
         env["VICTORY_WINDOW_KB"] = "1024"
         env["VICTORY_WINDOW_TAILS"] = "1"
         env["VICTORY_WC_NO_BACK"] = "1"
@@ -683,7 +683,7 @@ def launch_game(cfg, developer):
         env["VICTORY_JOIN_PARTS"] = "8"
         env["VICTORY_UPLOAD_AHEAD"] = "1"
         env["VICTORY_PIPELINE_WAIT_MS"] = "250"
-        env["VICTORY_LATE_WAIT_LISTS"] = "512"
+        env["VICTORY_LATE_WAIT_LISTS"] = "128"
         env["VICTORY_WIDE_THREADS"] = "12"
         env["VICTORY_LAND_THREADS"] = "10"
         env["VICTORY_LAND_SKIP"] = "1"
@@ -699,14 +699,14 @@ def launch_game(cfg, developer):
         env["VICTORY_TEXTURE_DROP_MIPS"] = "1"
         env["VICTORY_TEXTURE_STAGE_MB"] = "192"
         env["VICTORY_TEXTURE_CATCHUP"] = "1"
-        env["VICTORY_TEXTURE_AWAY_MS"] = "8000"
+        env["VICTORY_TEXTURE_AWAY_MS"] = "3000"
         env["VICTORY_EARLY_TEXTURES_MS"] = "16"
         env["VICTORY_BAKE_TEXTURES_MS"] = "2500"
         env["VICTORY_HEAP_RECHECK_EVERY"] = "30"
         env["VICTORY_COMPOSE"] = "1"
         env["VICTORY_SHARPEN"] = "0.18"
         env["VICTORY_PC_PROMPTS"] = "1"
-        env["VICTORY_WINDOWS_BAR_MB"] = "0"
+        env["VICTORY_WINDOWS_BAR_MB"] = "1024"
         env["VICTORY_WINDOW_KB"] = "1024"
         env["VICTORY_WINDOW_TAILS"] = "1"
         env["VICTORY_WC_NO_BACK"] = "1"
