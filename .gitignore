@@ -79,3 +79,6 @@ Thumbs.db
 __pycache__/
 *.pyc
 launcher/HANDOFF_VICE.md
+
+nvidia-sdk/
+victory-settings.txt

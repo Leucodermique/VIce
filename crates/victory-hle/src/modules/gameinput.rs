@@ -1,7 +1,7 @@
 //! `gameinput.dll`: input devices from the host. Gamepads come from XInput
 //! (host slots 0-3); while none is connected, the keyboard drives one
 //! stand-in gamepad (`FALLBACK_BUTTONS`). The keyboard is a device of its own
-//! too. A focused window also has a mouse. A poll thread records changes
+//! too. A poll thread turns host state into readings (a new one per change)
 //! and runs device callbacks on connect and disconnect.
 #![allow(non_snake_case)]
 // Title code calls these through the objects, passing pointers the real API
@@ -20,6 +20,10 @@ use std::time::{Duration, Instant};
 use super::xasync::{E_INVALIDARG, E_NOTIMPL};
 use super::xgameruntime::{HRESULT, S_OK};
 use crate::{HleExport, HleModule};
+
+// PS5 pads (DualSense, DualSense Edge) read straight from HID, USB or Bluetooth (from AnyXboxX's VIctory copy).
+#[cfg(any(windows, test))]
+mod dualsense;
 
 /// The documented errors.
 pub const DEVICE_DISCONNECTED: HRESULT = 0x838A_0001_u32 as i32;
@@ -52,18 +56,18 @@ const RIGHT_SHOULDER: u32 = 0x800;
 const LEFT_STICK: u32 = 0x1000;
 const RIGHT_STICK: u32 = 0x2000;
 
-/// Devices: host pad slots, the keyboard's stand-in pad, keyboard and mouse.
+/// Devices: host pad slots, the keyboard's stand-in pad, the keyboard.
 const PADS: usize = 4;
 const FALLBACK: usize = PADS;
 const KEYBOARD: usize = PADS + 1;
 const MOUSE: usize = PADS + 2;
-const DEVICES: usize = MOUSE + 1;
+const DEVICES: usize = PADS + 3;
 
 /// Readings kept per device for next/previous lookups.
 const HISTORY: usize = 256;
 const POLL: Duration = Duration::from_millis(8);
 
-/// The keyboard's stand-in gamepad (virtual key, button); classic layout.
+/// The keyboard's stand-in gamepad (virtual key, button); README lists it.
 /// Sticks: W/A/S/D left, I/J/K/L right; triggers Z and C.
 const FALLBACK_BUTTONS: [(u8, u32); 14] = [
     (0x1B, MENU), // Esc
@@ -82,22 +86,21 @@ const FALLBACK_BUTTONS: [(u8, u32); 14] = [
     (b'H', RIGHT_STICK),
 ];
 
-/// GTA-style PC keyboard buttons for AZERTY (Z/Q/S/D movement) and QWERTY
-/// (W/A/S/D movement), paired with native 360 mouse look and mouse clicks (LMB=RT, RMB=LT, MMB=R3).
+/// PC keyboard -> console gamepad mapping for French AZERTY (`VICTORY_KB_LAYOUT=azerty`).
 const PC_AZERTY_BUTTONS: [(u8, u32); 22] = [
-    (0x1B, MENU),           // Esc -> Pause
-    (b'P', MENU),           // P -> Pause
-    (b'V', VIEW),           // V -> Camera view
-    (0xA0, A),              // Left Shift -> Sprint / Confirm
-    (0x0D, A),              // Enter -> Confirm
-    (0x20, X),              // Space -> Jump / Climb
-    (b'R', B),              // R -> Reload / Melee / Back
-    (0x08, B),              // Backspace -> Back
-    (b'F', Y),              // F -> Enter / Exit vehicle
-    (0x09, LEFT_SHOULDER),  // Tab -> Weapon wheel
-    (b'A', LEFT_SHOULDER),  // A (left of Z on AZERTY) -> Weapon wheel / LB
-    (b'G', RIGHT_SHOULDER), // G -> Cover / RB
-    (b'X', RIGHT_SHOULDER), // X -> Cover / RB
+    (0x1B, MENU),           // Esc -> Pause / Menu
+    (b'P', MENU),           // P -> Pause / Menu
+    (b'V', VIEW),           // V -> Camera / View
+    (0xA0, A),              // Left Shift -> Sprint / Confirm (A)
+    (0x0D, A),              // Enter -> Confirm (A)
+    (0x20, X),              // Space -> Jump / Threaten / Action (X)
+    (b'R', B),              // R -> Reload / Cancel (B)
+    (0x08, B),              // Backspace -> Cancel (B)
+    (b'F', Y),              // F -> Enter vehicle / Interact (Y)
+    (0x09, LEFT_SHOULDER),  // Tab -> Weapon wheel (LB)
+    (b'A', LEFT_SHOULDER),  // A (AZERTY) -> Cover / LB
+    (b'G', RIGHT_SHOULDER), // G -> Throw / RB
+    (b'X', RIGHT_SHOULDER), // X -> RB alt
     (0xA2, LEFT_STICK),     // Left Ctrl -> Crouch / Stealth (L3)
     (b'C', RIGHT_STICK),    // C -> Look behind / Zoom (R3)
     (b'E', A),              // E -> Interact / Talk (A)
@@ -138,19 +141,18 @@ const PC_QWERTY_BUTTONS: [(u8, u32); 22] = [
 /// (read by `lifecycle::window_proc` on `WM_SETCURSOR` to hide the OS cursor).
 static CURSOR_HIDDEN: AtomicBool = AtomicBool::new(false);
 
-/// Incremented each time the title reads a gamepad state (`gamepad_state()`).
-/// Used to latch brief button/trigger clicks across slow frames (5-15 FPS) so
-/// quick fire (LMB), threaten (Space) and talk (E) taps are never missed.
+/// Incremented every time the title reads `gamepad_state` so `InputLatch` holds
+/// brief clicks/presses until the game has actually consumed them on slow frames.
 static GAMEPAD_READS: AtomicU64 = AtomicU64::new(0);
 
+#[cfg(windows)]
 pub(crate) fn cursor_hidden() -> bool {
     CURSOR_HIDDEN.load(Ordering::Relaxed)
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum KeyboardLayout {
     Classic,
-    Native,
     Azerty,
     Qwerty,
 }
@@ -163,9 +165,8 @@ fn keyboard_layout() -> KeyboardLayout {
             .to_ascii_lowercase()
             .as_str()
         {
-            "native" | "pc-native" | "kbm" => KeyboardLayout::Native,
-            "azerty" | "fr" | "pc-azerty" => KeyboardLayout::Azerty,
-            "qwerty" | "en" | "pc-qwerty" | "pc" => KeyboardLayout::Qwerty,
+            "azerty" | "fr" => KeyboardLayout::Azerty,
+            "qwerty" | "us" | "en" => KeyboardLayout::Qwerty,
             _ => KeyboardLayout::Classic,
         }
     });
@@ -197,7 +198,7 @@ struct KeyState {
 
 const _: () = assert!(size_of::<KeyState>() == 12 && size_of::<PadState>() == 28);
 
-/// GameInput v0 reports cumulative relative motion. Scroll axes stay at zero.
+/// GameInput v0: cumulative motion; scroll axes are not sampled.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct MouseState {
@@ -209,39 +210,35 @@ struct MouseState {
 }
 const _: () = assert!(size_of::<MouseState>() == 40);
 
-/// The next cursor reference and the motion since the previous focused sample.
-#[cfg(any(windows, test))]
-fn mouse_delta(
-    previous: Option<(i32, i32)>,
-    position: Option<(i32, i32)>,
-    size: (i32, i32),
-) -> (Option<(i32, i32)>, (i64, i64)) {
-    let current = position
-        .filter(|_| size.0 > 0 && size.1 > 0)
-        .map(|(x, y)| (x.clamp(0, size.0 - 1), y.clamp(0, size.1 - 1)));
-    let delta = match (previous, current) {
-        (Some((x, y)), Some((nx, ny))) => {
-            (i64::from(nx) - i64::from(x), i64::from(ny) - i64::from(y))
-        }
-        _ => (0, 0),
-    };
-    (current, delta)
+/// Applies one captured mouse sample. While the F1 settings menu is open,
+/// motion deltas are discarded and button bits are cleared while keeping the
+/// virtual mouse connected at its last position (so closing the menu causes
+/// no camera jump and no disconnect/reconnect churn).
+fn apply_mouse_sample(
+    mouse: &mut MouseState,
+    (dx, dy): (i64, i64),
+    buttons: u32,
+    menu_open: bool,
+) -> MouseState {
+    if menu_open {
+        mouse.buttons = 0;
+    } else {
+        mouse.position_x += dx;
+        mouse.position_y += dy;
+        mouse.buttons = buttons;
+    }
+    *mouse
 }
 
 /// Host input, or a fake in tests.
 trait Source: Send {
+    fn mouse(&mut self) -> Option<MouseState> { None }
+    /// Smoothed virtual right-stick camera deflection derived from captured mouse look.
+    fn mouse_stick(&mut self) -> (f32, f32) { (0.0, 0.0) }
     /// The pad in host slot `slot`, `None` when the slot is empty.
     fn pad(&mut self, slot: usize) -> Option<PadState>;
     /// Keys held down; none while the title's window lacks focus.
     fn keys(&mut self) -> Vec<KeyState>;
-    /// Native GameInput mouse device state while focused (`None` when disconnected).
-    fn mouse(&mut self) -> Option<MouseState> {
-        None
-    }
-    /// Smoothed right-stick camera vector derived from captured 360 mouse deltas.
-    fn mouse_stick(&mut self) -> (f32, f32) {
-        (0.0, 0.0)
-    }
     /// Motor speeds: low frequency (left), high frequency (right).
     fn rumble(&mut self, slot: usize, low: u16, high: u16);
 }
@@ -267,21 +264,6 @@ fn fallback_for(layout: KeyboardLayout, keys: &[KeyState]) -> PadState {
             right_x: on(b'L') - on(b'J'),
             right_y: on(b'I') - on(b'K'),
         },
-        KeyboardLayout::Native => {
-            // Native PC keyboard + native GameInput mouse mode:
-            // keep all letter/action keys exclusively on KEYBOARD_KIND (hardware
-            // scan codes so AZERTY Z/Q/S/D naturally match W/A/S/D with zero
-            // duplicate gamepad actions), mapping only Enter / F9 -> A for the
-            // Xbox start screen prompt.
-            let mut buttons = 0;
-            if on(0x0D) != 0.0 || on(0x78) != 0.0 {
-                buttons |= A;
-            }
-            PadState {
-                buttons,
-                ..Default::default()
-            }
-        }
         KeyboardLayout::Azerty => PadState {
             buttons: PC_AZERTY_BUTTONS
                 .iter()
@@ -326,10 +308,6 @@ fn stick_with_deadzone(v: f32) -> f32 {
     (FLOOR + t * (1.0 - FLOOR)).copysign(v)
 }
 
-/// Maps focused mouse clicks (LMB -> RT fire/accelerate, RMB -> LT aim/brake,
-/// MMB -> R3 look behind) and captured 360 mouse look (`stick` -> right stick)
-/// onto the stand-in gamepad for PC layouts, since console builds read the
-/// gameplay camera from `GAMEPAD_KIND` right stick.
 fn mouse_click_pad(layout: KeyboardLayout, mouse: Option<MouseState>, stick: (f32, f32)) -> PadState {
     if !matches!(layout, KeyboardLayout::Azerty | KeyboardLayout::Qwerty) {
         return PadState::default();
@@ -420,10 +398,11 @@ struct DeviceInfo {
 const _: () = assert!(std::mem::offset_of!(DeviceInfo, id) == 0x20);
 
 fn kind(index: usize) -> u32 {
-    match index {
-        KEYBOARD => KEYBOARD_KIND,
-        MOUSE => MOUSE_KIND,
-        _ => GAMEPAD_KIND,
+    if index == MOUSE { return MOUSE_KIND; }
+    if index == KEYBOARD {
+        KEYBOARD_KIND
+    } else {
+        GAMEPAD_KIND
     }
 }
 
@@ -457,9 +436,9 @@ impl Device {
 
 #[derive(PartialEq)]
 enum Value {
+    Mouse(MouseState),
     Pad(PadState),
     Keys(Vec<KeyState>),
-    Mouse(MouseState),
 }
 
 #[repr(C)]
@@ -475,9 +454,9 @@ pub struct Reading {
 impl Reading {
     fn kind(&self) -> u32 {
         match self.value {
+            Value::Mouse(_) => MOUSE_KIND,
             Value::Pad(_) => GAMEPAD_KIND,
             Value::Keys(_) => KEYBOARD_KIND,
-            Value::Mouse(_) => MOUSE_KIND,
         }
     }
 }
@@ -558,13 +537,12 @@ struct Slot {
 
 /// Holds brief button and trigger presses (e.g. quick LMB fire, Space threaten,
 /// E talk) until the title has actually read the gamepad at least twice (or
-/// 220 ms have elapsed), preventing missed inputs between slow frames (5-15 FPS).
+/// 220 ms have elapsed), preventing missed inputs between slow frames.
 #[derive(Default)]
 struct InputLatch {
     prev_buttons: u32,
     prev_lt: bool,
     prev_rt: bool,
-    /// Per button bit (0..14): `(reads_at_press, deadline_us)` while latched.
     btn_latch: [Option<(u64, u64)>; 14],
     lt_latch: Option<(u64, u64)>,
     rt_latch: Option<(u64, u64)>,
@@ -780,41 +758,31 @@ impl State {
         stick: (f32, f32),
     ) -> Vec<Event> {
         let now = now();
+        let reads = GAMEPAD_READS.load(Ordering::Relaxed);
         let mut events = std::mem::take(&mut self.pending);
-        self.update(devices, MOUSE, mouse.map(Value::Mouse), now, &mut events);
-        let layout = keyboard_layout();
-        let raw_stand_in = merged(fallback(&keys), mouse_click_pad(layout, mouse, stick));
-        let stand_in = if matches!(layout, KeyboardLayout::Azerty | KeyboardLayout::Qwerty) {
-            self.latch.apply(raw_stand_in, now, GAMEPAD_READS.load(Ordering::Relaxed))
-        } else {
-            raw_stand_in
-        };
-        // - Classic / Native: expose the real GameInput keyboard device (in
-        //   Native mode, drop Enter from KEYBOARD_KIND so Enter -> A on the
-        //   stand-in pad never double-submits menu selections).
-        // - Azerty / Qwerty (console-build PC layouts): drive GAMEPAD_KIND from
-        //   keyboard + mouse clicks and MOUSE_KIND for 360 camera, keeping
-        //   KEYBOARD_KIND empty to avoid duplicate/debug actions.
-        let reported_keys = match layout {
-            KeyboardLayout::Classic => keys,
-            KeyboardLayout::Native => keys.into_iter().filter(|k| k.virtual_key != 0x0D).collect(),
-            KeyboardLayout::Azerty | KeyboardLayout::Qwerty => Vec::new(),
-        };
         let any_pad = pads.iter().any(Option::is_some);
         #[cfg(windows)]
         victory_gpu::set_real_pad_connected(any_pad);
+        let layout = keyboard_layout();
+        let base = merged(fallback_for(layout, &keys), mouse_click_pad(layout, mouse, stick));
+        let base = if matches!(layout, KeyboardLayout::Azerty | KeyboardLayout::Qwerty) {
+            self.latch.apply(base, now, reads)
+        } else {
+            base
+        };
+        self.update(devices, MOUSE, mouse.map(Value::Mouse), now, &mut events);
         if one_pad {
-            let pad = pads.into_iter().flatten().fold(stand_in, merged);
+            let pad = pads.into_iter().flatten().fold(base, merged);
             self.update(devices, FALLBACK, Some(Value::Pad(pad)), now, &mut events);
-            self.update(devices, KEYBOARD, Some(Value::Keys(reported_keys)), now, &mut events);
+            self.update(devices, KEYBOARD, Some(Value::Keys(keys)), now, &mut events);
             return events;
         }
         for (slot, pad) in pads.into_iter().enumerate() {
             self.update(devices, slot, pad.map(Value::Pad), now, &mut events);
         }
-        let fallback_pad = (!any_pad).then(|| Value::Pad(stand_in));
-        self.update(devices, FALLBACK, fallback_pad, now, &mut events);
-        self.update(devices, KEYBOARD, Some(Value::Keys(reported_keys)), now, &mut events);
+        let fallback = (!any_pad).then(|| Value::Pad(base));
+        self.update(devices, FALLBACK, fallback, now, &mut events);
+        self.update(devices, KEYBOARD, Some(Value::Keys(keys)), now, &mut events);
         events
     }
 
@@ -848,10 +816,7 @@ impl State {
             }));
         }
         if was != slot.connected {
-            tracing::info!(device = index, kind = kind(index), connected = !was, "input device");
-            if index == MOUSE && !slot.connected {
-                slot.history.clear();
-            }
+            tracing::info!(device = index, connected = !was, "input device");
             let (current, previous) = if was {
                 (0, STATUS_CONNECTED)
             } else {
@@ -1202,10 +1167,8 @@ extern "system" fn find_by_id(this: This, id: *const [u8; 32], out: Out) -> HRES
     }
     // SAFETY: checked non-null; the title passes a device id.
     let id = unsafe { &*id };
-    let hub = hub(this);
-    match hub.devices.iter().find(|d| {
-        d.info.id == *id && (d.index != MOUSE || hub.state().slots[MOUSE].connected)
-    }) {
+    match hub(this).devices.iter().find(|d| d.info.id == *id
+        && (d.index != MOUSE || hub(this).state().slots[MOUSE].connected)) {
         Some(device) => {
             // SAFETY: checked non-null.
             unsafe { out.write((device as *const Device).cast()) };
@@ -1395,14 +1358,12 @@ extern "system" fn gamepad_state(this: *const Reading, out: *mut PadState) -> bo
     }
 }
 extern "system" fn mouse_state(this: *const Reading, out: *mut MouseState) -> bool {
-    match &reading(this).value {
-        Value::Mouse(state) if !out.is_null() => {
-            // SAFETY: the caller supplies room for the v0 state.
-            unsafe { out.write(*state) };
-            true
-        }
-        _ => false,
+    if let Value::Mouse(state) = &reading(this).value && !out.is_null() {
+        // SAFETY: the caller supplies room for one v0 mouse state.
+        unsafe { out.write(*state) };
+        return true;
     }
+    false
 }
 /// Kinds our devices do not have: no count, no state.
 extern "system" fn nothing(_: *const c_void) -> usize {
@@ -1449,7 +1410,7 @@ pub(crate) fn module() -> HleModule {
     }
 }
 
-/// Host input: XInput pads, and keyboard and mouse while our process has focus.
+/// Host input: XInput pads, the keyboard while our process has focus.
 #[cfg(windows)]
 mod host {
     use std::time::{Duration, Instant};
@@ -1514,11 +1475,14 @@ mod host {
 
     pub(super) struct Host {
         empty_until: [Option<Instant>; PADS],
+        mouse: MouseState,
+        /// The input snapshot for this poll and the HID connection owning each slot.
+        pads: [Option<PadState>; PADS],
+        hid_slots: [Option<u64>; PADS],
         mouse_captured: bool,
         mouse_primed: bool,
         f8_was_down: bool,
         previous_cursor: Option<(i32, i32)>,
-        mouse: MouseState,
         smooth_x: f32,
         smooth_y: f32,
     }
@@ -1528,11 +1492,13 @@ mod host {
             let capture = std::env::var_os("VICTORY_MOUSE_CAPTURE").is_none_or(|v| v != "0");
             Self {
                 empty_until: [None; PADS],
+                mouse: MouseState::default(),
+                pads: [None; PADS],
+                hid_slots: [None; PADS],
                 mouse_captured: capture,
                 mouse_primed: false,
                 f8_was_down: false,
                 previous_cursor: None,
-                mouse: MouseState::default(),
                 smooth_x: 0.0,
                 smooth_y: 0.0,
             }
@@ -1563,8 +1529,8 @@ mod host {
         }
     }
 
-    impl Source for Host {
-        fn pad(&mut self, slot: usize) -> Option<PadState> {
+    impl Host {
+        fn xinput(&mut self, slot: usize) -> Option<PadState> {
             if self.empty_until[slot].is_some_and(|until| Instant::now() < until) {
                 return None;
             }
@@ -1575,51 +1541,47 @@ mod host {
                 return None;
             }
             self.empty_until[slot] = None;
-            #[allow(unused_mut)]
-            let mut pad = convert(&state.Gamepad);
-            // The scripted keys (`VICTORY_KEYS`) also press the first
-            // pad's buttons, by the stand-in pad's table: with a real pad
-            // connected the stand-in is not there, and a title that listens
-            // to the pad (the title's start screen) saw nothing.
-            #[cfg(feature = "diagnostics")]
-            if slot == 0 {
-                for vk in scripted() {
-                    if let Some(&(_, button)) = super::FALLBACK_BUTTONS.iter().find(|(key, _)| *key == vk) {
-                        pad.buttons |= button;
-                    }
-                }
-            }
-            Some(pad)
+            Some(convert(&state.Gamepad))
         }
+    }
 
-        fn keys(&mut self) -> Vec<KeyState> {
-            #[cfg(feature = "diagnostics")]
-            let mut down = scripted();
-            #[cfg(not(feature = "diagnostics"))]
-            let mut down = Vec::new();
-            if focused_window().is_some() {
-                // Left/right modifier keys only, as devices report them; no
-                // mouse buttons (below 0x08).
-                let held: Vec<u8> = (0x08..=0xFE_u8)
-                    .filter(|vk| !(0x10..=0x12).contains(vk) && !down.contains(vk))
-                    // SAFETY: plain queries.
-                    .filter(|&vk| unsafe { GetAsyncKeyState(i32::from(vk)) } < 0)
-                    .collect();
-                down.extend(held);
+    impl Source for Host {
+        fn mouse_stick(&mut self) -> (f32, f32) {
+            if victory_gpu::SETTINGS_MENU_OPEN.load(Ordering::Relaxed) {
+                return (0.0, 0.0);
             }
-            down.into_iter()
-                .map(|vk| KeyState {
-                    // SAFETY: plain query.
-                    scan_code: unsafe { MapVirtualKeyW(u32::from(vk), MAPVK_VK_TO_VSC_EX) },
-                    virtual_key: vk,
-                    // shortcut: no characters (code point 0);
-                    // the title reads scan codes and virtual keys only.
-                    ..Default::default()
-                })
-                .collect()
+            (self.smooth_x, self.smooth_y)
         }
 
         fn mouse(&mut self) -> Option<MouseState> {
+            let menu_open = victory_gpu::SETTINGS_MENU_OPEN.load(Ordering::Relaxed);
+            // If upstream raw-input capture (`VICTORY_MOUSE_CAPTURE=1`) is driving lifecycle,
+            // honour its deltas; otherwise use our proven PC recenter 360 mouse look (`VICTORY_GAMEPAD_MOUSE`).
+            if let Some(delta) = crate::modules::lifecycle::captured_mouse_delta() {
+                let buttons = if menu_open {
+                    0
+                } else {
+                    [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON, VK_XBUTTON1, VK_XBUTTON2]
+                        .into_iter()
+                        .enumerate()
+                        // SAFETY: virtual-key state query.
+                        .fold(0, |bits, (i, vk)| bits | ((unsafe { GetAsyncKeyState(i32::from(vk)) } < 0) as u32) << i)
+                };
+                if menu_open {
+                    self.smooth_x = 0.0;
+                    self.smooth_y = 0.0;
+                    CURSOR_HIDDEN.store(false, Ordering::Relaxed);
+                } else {
+                    let sens = mouse_sensitivity();
+                    self.smooth_x = (self.smooth_x * 0.90 + (delta.0 as f32) * sens).clamp(-1.0, 1.0);
+                    self.smooth_y = (self.smooth_y * 0.90 - (delta.1 as f32) * sens).clamp(-1.0, 1.0);
+                    if self.smooth_x.abs() < 0.012 { self.smooth_x = 0.0; }
+                    if self.smooth_y.abs() < 0.012 { self.smooth_y = 0.0; }
+                    CURSOR_HIDDEN.store(true, Ordering::Relaxed);
+                }
+                return Some(super::apply_mouse_sample(&mut self.mouse, delta, buttons, menu_open));
+            }
+
             static ENABLED: LazyLock<bool> =
                 LazyLock::new(|| std::env::var_os("VICTORY_GAMEPAD_MOUSE").is_none_or(|v| v != "0"));
             if !*ENABLED {
@@ -1632,11 +1594,20 @@ mod host {
                 CURSOR_HIDDEN.store(false, Ordering::Relaxed);
                 self.mouse_primed = false;
                 self.previous_cursor = None;
-                self.mouse = MouseState::default();
+                self.mouse.buttons = 0;
                 self.smooth_x = 0.0;
                 self.smooth_y = 0.0;
                 return None;
             };
+            if menu_open {
+                CURSOR_HIDDEN.store(false, Ordering::Relaxed);
+                self.mouse_primed = false;
+                self.previous_cursor = None;
+                self.smooth_x = 0.0;
+                self.smooth_y = 0.0;
+                return Some(super::apply_mouse_sample(&mut self.mouse, (0, 0), 0, true));
+            }
+
             // Toggle cursor lock / OS cursor hiding anytime with F8.
             // SAFETY: plain virtual-key state query.
             let f8_down = unsafe { GetAsyncKeyState(i32::from(VK_F8)) } < 0;
@@ -1662,7 +1633,6 @@ mod host {
                 CURSOR_HIDDEN.store(false, Ordering::Relaxed);
                 self.mouse_primed = false;
                 self.previous_cursor = None;
-                self.mouse = MouseState::default();
                 self.smooth_x = 0.0;
                 self.smooth_y = 0.0;
                 return None;
@@ -1700,50 +1670,81 @@ mod host {
                         unsafe { SetCursorPos(center_screen.x, center_screen.y) };
                     }
                     let sens = mouse_sensitivity();
-                    // Slower 0.90 decay keeps camera / aiming motion alive across 8-15 FPS frames
-                    // (70-125 ms) so aiming at the clerk during the robbery stays responsive.
                     self.smooth_x = (self.smooth_x * 0.90 + (dx as f32) * sens).clamp(-1.0, 1.0);
                     self.smooth_y = (self.smooth_y * 0.90 - (dy as f32) * sens).clamp(-1.0, 1.0);
-                    if self.smooth_x.abs() < 0.012 {
-                        self.smooth_x = 0.0;
-                    }
-                    if self.smooth_y.abs() < 0.012 {
-                        self.smooth_y = 0.0;
-                    }
+                    if self.smooth_x.abs() < 0.012 { self.smooth_x = 0.0; }
+                    if self.smooth_y.abs() < 0.012 { self.smooth_y = 0.0; }
                     (dx, dy)
                 }
             } else {
                 CURSOR_HIDDEN.store(false, Ordering::Relaxed);
+                let prev = self.previous_cursor.replace((point.x, point.y));
                 self.smooth_x = 0.0;
                 self.smooth_y = 0.0;
-                let (cursor, delta) = mouse_delta(
-                    self.previous_cursor,
-                    inside_client.then_some((point.x, point.y)),
-                    (rect.right, rect.bottom),
-                );
-                self.previous_cursor = cursor;
-                delta
+                prev.map_or((0, 0), |(px, py)| (i64::from(point.x - px), i64::from(point.y - py)))
             };
 
-            self.mouse.position_x += dx;
-            self.mouse.position_y += dy;
-            self.mouse.buttons = 0;
-            // Always read mouse clicks while the game window is focused so LMB (fire)
-            // and RMB (aim) never drop even near window edges or when F8 is toggled.
-            for (bit, vk) in [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON, VK_XBUTTON1, VK_XBUTTON2]
+            let buttons = [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON, VK_XBUTTON1, VK_XBUTTON2]
                 .into_iter()
                 .enumerate()
-            {
-                // SAFETY: virtual-key state query.
-                if unsafe { GetAsyncKeyState(i32::from(vk)) } < 0 {
-                    self.mouse.buttons |= 1 << bit;
+                // SAFETY: plain virtual-key state query while our window has focus.
+                .fold(0, |bits, (i, vk)| bits | ((unsafe { GetAsyncKeyState(i32::from(vk)) } < 0) as u32) << i);
+
+            Some(super::apply_mouse_sample(&mut self.mouse, (dx, dy), buttons, false))
+        }
+        fn pad(&mut self, slot: usize) -> Option<PadState> {
+            // XInput first; HID PS5 pads take the slots XInput leaves free (`VICTORY_DUALSENSE`: 0 off, 1 both).
+            if slot == 0 {
+                let xinput = std::array::from_fn(|slot| self.xinput(slot));
+                self.pads = super::dualsense::slots(
+                    super::dualsense::mode(),
+                    xinput,
+                    &mut self.hid_slots,
+                    super::dualsense::pads,
+                );
+            }
+            #[allow(unused_mut)]
+            let mut pad = self.pads[slot]?;
+            // The scripted keys (`VICTORY_KEYS`) also press the first
+            // pad's buttons, by the stand-in pad's table: with a real pad
+            // connected the stand-in is not there, and a title that listens
+            // to the pad (the title's start screen) saw nothing.
+            if slot == 0 {
+                for vk in scripted() {
+                    if let Some(&(_, button)) = super::FALLBACK_BUTTONS.iter().find(|(key, _)| *key == vk) {
+                        pad.buttons |= button;
+                    }
                 }
             }
-            Some(self.mouse)
+            Some(pad)
         }
 
-        fn mouse_stick(&mut self) -> (f32, f32) {
-            (self.smooth_x, self.smooth_y)
+        fn keys(&mut self) -> Vec<KeyState> {
+            // The F1 settings menu takes the keyboard while it is shown.
+            if victory_gpu::SETTINGS_MENU_OPEN.load(std::sync::atomic::Ordering::Relaxed) {
+                return Vec::new();
+            }
+            let mut down = scripted();
+            if focused() {
+                // Left/right modifier keys only, as devices report them; no
+                // mouse buttons (below 0x08).
+                let held: Vec<u8> = (0x08..=0xFE_u8)
+                    .filter(|vk| !(0x10..=0x12).contains(vk) && !down.contains(vk))
+                    // SAFETY: plain queries.
+                    .filter(|&vk| unsafe { GetAsyncKeyState(i32::from(vk)) } < 0)
+                    .collect();
+                down.extend(held);
+            }
+            down.into_iter()
+                .map(|vk| KeyState {
+                    // SAFETY: plain query.
+                    scan_code: unsafe { MapVirtualKeyW(u32::from(vk), MAPVK_VK_TO_VSC_EX) },
+                    virtual_key: vk,
+                    // shortcut: no characters (code point 0);
+                    // the title reads scan codes and virtual keys only.
+                    ..Default::default()
+                })
+                .collect()
         }
 
         fn rumble(&mut self, slot: usize, low: u16, high: u16) {
@@ -1756,31 +1757,34 @@ mod host {
         }
     }
 
+    /// A scripted key's virtual key: a letter, a digit, or `Enter`, `Esc`,
+    /// `Tab`, `Back`, `Up`, `Down`, `Left`, `Right`.
+    fn key_code(name: &str) -> Option<u8> {
+        Some(match name.trim() {
+            "Enter" => 0x0D,
+            "Esc" => 0x1B,
+            "Tab" => 0x09,
+            "Back" => 0x08,
+            "Up" => 0x26,
+            "Down" => 0x28,
+            "Left" => 0x25,
+            "Right" => 0x27,
+            k if k.len() == 1 && k.as_bytes()[0].is_ascii_alphanumeric() => k.as_bytes()[0].to_ascii_uppercase(),
+            _ => return None,
+        })
+    }
+
     /// Debugging aid: `VICTORY_KEYS=<seconds>:<key>,...` holds each key for
     /// 0.2 s that long after input starts (`<from>-<to>:<key>`: all that
-    /// time), with or without focus. A key is a
-    /// letter, a digit, or `Enter`, `Esc`, `Tab`, `Back`, `Up`, `Down`,
-    /// `Left`, `Right` (the stand-in pad's table maps them to buttons).
-    #[cfg(feature = "diagnostics")]
+    /// time), with or without focus. Keys as [`key_code`] names them (the
+    /// stand-in pad's table maps them to buttons). Also the keys of
+    /// [`live`] (`VICTORY_KEYS_FILE`).
     fn scripted() -> Vec<u8> {
         static SCRIPT: LazyLock<(Instant, Vec<(Duration, Duration, u8)>)> = LazyLock::new(|| {
             let list = std::env::var("VICTORY_KEYS").unwrap_or_default();
             let keys = list.split(',').filter_map(|entry| {
                 let (at, key) = entry.split_once(':')?;
-                let vk = match key.trim() {
-                    "Enter" => 0x0D,
-                    "Esc" => 0x1B,
-                    "Tab" => 0x09,
-                    "Back" => 0x08,
-                    "Up" => 0x26,
-                    "Down" => 0x28,
-                    "Left" => 0x25,
-                    "Right" => 0x27,
-                    k if k.len() == 1 && k.as_bytes()[0].is_ascii_alphanumeric() => {
-                        k.as_bytes()[0].to_ascii_uppercase()
-                    }
-                    _ => return None,
-                };
+                let vk = key_code(key)?;
                 let time = |t: &str| Duration::try_from_secs_f64(t.trim().parse().ok()?).ok();
                 let (from, to) = match at.split_once('-') {
                     Some((from, to)) => (time(from)?, time(to)?),
@@ -1792,10 +1796,117 @@ mod host {
         });
         let (start, keys) = &*SCRIPT;
         let now = start.elapsed();
-        keys.iter()
+        let mut down: Vec<u8> = keys
+            .iter()
             .filter(|&&(from, to, _)| (from..to).contains(&now))
             .map(|&(_, _, vk)| vk)
-            .collect()
+            .collect();
+        for vk in live() {
+            if !down.contains(&vk) {
+                down.push(vk);
+            }
+        }
+        down
+    }
+
+    /// A key [`live`] holds: from `from` for `hold`.
+    struct LiveKey {
+        from: Instant,
+        hold: Duration,
+        vk: u8,
+    }
+
+    /// One line of `VICTORY_KEYS_FILE`: `<key> [<hold s> [<after s>]]`, held
+    /// 0.2 s by default, starting `after` seconds after it is read (0 by
+    /// default). `None` for a line that says nothing of the kind.
+    fn live_line(line: &str, read: Instant) -> Option<LiveKey> {
+        let mut words = line.split_whitespace();
+        let vk = key_code(words.next()?)?;
+        let mut seconds = || words.next().and_then(|w| w.parse::<f64>().ok()).and_then(|s| Duration::try_from_secs_f64(s).ok());
+        let hold = seconds().unwrap_or(Duration::from_millis(200)).min(Duration::from_secs(60));
+        let after = seconds().unwrap_or_default().min(Duration::from_secs(600));
+        Some(LiveKey { from: read + after, hold, vk })
+    }
+
+    /// Debugging aid for a driver outside the process:
+    /// `VICTORY_KEYS_FILE=<file>`, a text file the driver appends lines to
+    /// while the title runs, each `<key> [<hold seconds> [<after seconds>]]`
+    /// (keys as [`key_code`] names them), e.g. `Enter`, `W 3` (walk ahead for
+    /// three seconds) or `Enter 0.2 5`. A thread of ours reads what was
+    /// appended every 50 ms; lines in the file before the run are skipped.
+    /// With or without focus, as [`scripted`]. The keys held now.
+    fn live() -> Vec<u8> {
+        use std::io::{Read, Seek, SeekFrom};
+        use std::sync::Mutex;
+        static KEYS: Mutex<Vec<LiveKey>> = Mutex::new(Vec::new());
+        static STARTED: std::sync::Once = std::sync::Once::new();
+        STARTED.call_once(|| {
+            let Some(path) = std::env::var_os("VICTORY_KEYS_FILE") else { return };
+            tracing::info!(file = %std::path::Path::new(&path).display(), "keys are read from a file as it grows (VICTORY_KEYS_FILE)");
+            let _ = std::thread::Builder::new().name("victory-keys-file".into()).spawn(move || {
+                // Skip what is there already.
+                let mut at = std::fs::metadata(&path).map_or(0, |m| m.len());
+                let mut rest = String::new();
+                loop {
+                    std::thread::sleep(Duration::from_millis(50));
+                    let Ok(mut file) = std::fs::File::open(&path) else { continue };
+                    let len = file.metadata().map_or(0, |m| m.len());
+                    if len < at {
+                        // Emptied or replaced: read it from the start.
+                        at = 0;
+                        rest.clear();
+                    }
+                    if len == at || file.seek(SeekFrom::Start(at)).is_err() {
+                        continue;
+                    }
+                    let mut bytes = Vec::new();
+                    let Ok(n) = file.read_to_end(&mut bytes) else { continue };
+                    at += n as u64;
+                    rest.push_str(&String::from_utf8_lossy(&bytes));
+                    let read = Instant::now();
+                    // Whole lines only; a line still being written waits.
+                    let Some(end) = rest.rfind('\n') else { continue };
+                    let lines: String = rest.drain(..=end).collect();
+                    let mut keys = KEYS.lock().unwrap_or_else(|e| e.into_inner());
+                    for line in lines.lines().filter(|l| !l.trim().is_empty()) {
+                        match live_line(line, read) {
+                            Some(key) => keys.push(key),
+                            None => tracing::warn!(line, "VICTORY_KEYS_FILE: not a key line"),
+                        }
+                    }
+                }
+            });
+        });
+        let now = Instant::now();
+        let mut keys = KEYS.lock().unwrap_or_else(|e| e.into_inner());
+        keys.retain(|k| now < k.from + k.hold);
+        keys.iter().filter(|k| k.from <= now).map(|k| k.vk).collect()
+    }
+
+    #[test]
+    fn live_key_lines() {
+        let t = Instant::now();
+        let k = live_line("Enter", t).unwrap();
+        assert_eq!((k.vk, k.from, k.hold), (0x0D, t, Duration::from_millis(200)));
+        let k = live_line("  w 3  ", t).unwrap();
+        assert_eq!((k.vk, k.hold), (b'W', Duration::from_secs(3)));
+        let k = live_line("Up 0.5 2", t).unwrap();
+        assert_eq!((k.vk, k.from, k.hold), (0x26, t + Duration::from_secs(2), Duration::from_millis(500)));
+        // Holds are kept to a minute; unknown keys and bad numbers say nothing or fall back.
+        assert_eq!(live_line("S 999", t).unwrap().hold, Duration::from_secs(60));
+        assert_eq!(live_line("D x", t).unwrap().hold, Duration::from_millis(200));
+        assert!(live_line("Shift", t).is_none());
+        assert!(live_line("", t).is_none());
+    }
+
+    /// The foreground window is one of ours (the title's or our fallback).
+    fn focused() -> bool {
+        let mut process = 0;
+        // SAFETY: plain queries; a null window gives process 0.
+        unsafe {
+            GetWindowThreadProcessId(GetForegroundWindow(), &mut process);
+            process == GetCurrentProcessId()
+        }
     }
 
     #[test]
@@ -1833,23 +1944,21 @@ mod tests {
 
     #[derive(Default)]
     struct FakeHost {
+        mouse: Option<MouseState>,
         pads: [Option<PadState>; PADS],
         keys: Vec<KeyState>,
-        mouse: Option<MouseState>,
         rumble: Vec<(usize, u16, u16)>,
     }
 
     struct Fake(Arc<Mutex<FakeHost>>);
 
     impl Source for Fake {
+        fn mouse(&mut self) -> Option<MouseState> { self.0.lock().unwrap().mouse }
         fn pad(&mut self, slot: usize) -> Option<PadState> {
             self.0.lock().unwrap().pads[slot]
         }
         fn keys(&mut self) -> Vec<KeyState> {
             self.0.lock().unwrap().keys.clone()
-        }
-        fn mouse(&mut self) -> Option<MouseState> {
-            self.0.lock().unwrap().mouse
         }
         fn rumble(&mut self, slot: usize, low: u16, high: u16) {
             self.0.lock().unwrap().rumble.push((slot, low, high));
@@ -1983,6 +2092,45 @@ mod tests {
             Some(Provenance::Hle)
         );
         assert_eq!(r.classify("GameInput.dll", &ImportSymbol::Ordinal(2)), None);
+    }
+
+    #[test]
+    fn mouse_readings_connect_and_disconnect_in_both_pad_modes() {
+        for one_pad in [false, true] {
+            let (hub, host) = fake_with(one_pad);
+            let log = Log::default();
+            register(hub, MOUSE_KIND, 2, &log);
+            assert!(log.lock().unwrap().is_empty());
+            let sample = MouseState { position_x: 30, position_y: -12, buttons: 1, ..Default::default() };
+            host.lock().unwrap().mouse = Some(sample);
+            hub.poll();
+            let r = current(hub, MOUSE_KIND, MOUSE).unwrap();
+            let mut got = MouseState::default();
+            let get = slot::<extern "system" fn(*const Reading, *mut MouseState) -> bool, _>(r, 0x80);
+            assert!(get(r, &mut got));
+            assert_eq!(got, sample);
+            assert!(!get(r, std::ptr::null_mut()));
+            release(r);
+            host.lock().unwrap().mouse = None;
+            hub.poll();
+            assert_eq!(current(hub, MOUSE_KIND, MOUSE), Err(DEVICE_DISCONNECTED));
+            assert_eq!(*log.lock().unwrap(), [(MOUSE, STATUS_CONNECTED, 0), (MOUSE, 0, STATUS_CONNECTED)]);
+        }
+    }
+
+    #[test]
+    fn mouse_motion_and_buttons_are_suppressed_while_settings_menu_is_open() {
+        let mut mouse = MouseState::default();
+        let active = apply_mouse_sample(&mut mouse, (12, -5), 0b11, false);
+        assert_eq!(active, MouseState { position_x: 12, position_y: -5, buttons: 0b11, ..Default::default() });
+
+        // Opening the F1 menu drops motion deltas and clears buttons while keeping position.
+        let paused = apply_mouse_sample(&mut mouse, (40, 25), 0b01, true);
+        assert_eq!(paused, MouseState { position_x: 12, position_y: -5, buttons: 0, ..Default::default() });
+
+        // Closing the F1 menu resumes cleanly from the preserved position with no jump.
+        let resumed = apply_mouse_sample(&mut mouse, (3, 4), 0b10, false);
+        assert_eq!(resumed, MouseState { position_x: 15, position_y: -1, buttons: 0b10, ..Default::default() });
     }
 
     #[test]
@@ -2188,139 +2336,6 @@ mod tests {
         assert_eq!(FROM_INSIDE.load(Ordering::SeqCst), 1);
         poller.join().unwrap();
         leave.join().unwrap();
-    }
-
-    #[test]
-    fn mouse_motion_clamps_to_client_and_resets_on_focus_loss() {
-        let mut previous = None;
-        for (point, delta) in [
-            (Some((50, 40)), (0, 0)),
-            (Some((30, 10)), (-20, -30)),
-            (Some((200, -5)), (69, -10)),
-            (Some((201, -8)), (0, 0)),
-            (None, (0, 0)),
-            (Some((7, 9)), (0, 0)),
-        ] {
-            let (cursor, motion) = mouse_delta(previous, point, (100, 80));
-            assert_eq!(motion, delta);
-            previous = cursor;
-        }
-    }
-
-    #[test]
-    fn mouse_readings_and_callbacks_in_both_pad_modes() {
-        for one_pad in [false, true] {
-            let (hub, host) = fake_with(one_pad);
-            let log = Log::default();
-            register(hub, MOUSE_KIND, 2, &log);
-            let sample = MouseState {
-                buttons: 5,
-                position_x: -3,
-                ..Default::default()
-            };
-            host.lock().unwrap().mouse = Some(sample);
-            hub.poll();
-            let r = current(hub, MOUSE_KIND, MOUSE).unwrap();
-            let get =
-                slot::<extern "system" fn(*const Reading, *mut MouseState) -> bool, _>(r, 0x80);
-            let mut got = MouseState::default();
-            assert!(get(r, &mut got));
-            assert_eq!(got, sample);
-            release(r);
-
-            host.lock().unwrap().mouse = None;
-            hub.poll();
-            assert_eq!(current(hub, MOUSE_KIND, MOUSE), Err(DEVICE_DISCONNECTED));
-            assert!(hub.state().slots[MOUSE].history.is_empty());
-            assert_eq!(*log.lock().unwrap(), [(MOUSE, 3, 0), (MOUSE, 0, 3)]);
-        }
-    }
-
-    #[test]
-    fn native_pc_layout_keeps_keyboard_clean_and_maps_only_start_confirm() {
-        let letters = vec![key(b'Z'), key(b'Q'), key(b'S'), key(b'D'), key(b'E'), key(b'F')];
-        assert_eq!(fallback_for(KeyboardLayout::Native, &letters), PadState::default());
-        assert_eq!(fallback_for(KeyboardLayout::Native, &[key(0x0D)]).buttons, A);
-        assert_eq!(fallback_for(KeyboardLayout::Native, &[key(0x78)]).buttons, A);
-    }
-
-    #[test]
-    fn azerty_pc_layout_maps_zqsd_and_gta_keys() {
-        let keys = vec![
-            key(b'Z'),
-            key(b'D'),
-            key(0xA0), // Left Shift -> A (sprint)
-            key(0x20), // Space -> X (jump)
-            key(b'F'), // F -> Y (vehicle)
-            key(b'R'), // R -> B (reload)
-            key(b'E'), // E -> A (interact / talk)
-            key(0xA2), // Left Ctrl -> L3 (crouch)
-            key(b'V'), // V -> View (camera)
-        ];
-        let pad = fallback_for(KeyboardLayout::Azerty, &keys);
-        assert_eq!(pad.left_x, 1.0);
-        assert_eq!(pad.left_y, 1.0);
-        assert_eq!(pad.buttons, A | X | Y | B | LEFT_STICK | VIEW);
-        assert_eq!(fallback_for(KeyboardLayout::Azerty, &[key(b'E')]).buttons, A);
-        let back_left = fallback_for(KeyboardLayout::Azerty, &[key(b'S'), key(b'Q')]);
-        assert_eq!((back_left.left_x, back_left.left_y), (-1.0, -1.0));
-        let clicks = mouse_click_pad(
-            KeyboardLayout::Azerty,
-            Some(MouseState {
-                buttons: 0x7,
-                ..Default::default()
-            }),
-            (0.05, -0.5),
-        );
-        assert_eq!(
-            (clicks.right_trigger, clicks.left_trigger, clicks.buttons),
-            (1.0, 1.0, RIGHT_STICK)
-        );
-        assert!(clicks.right_x >= 0.22 && clicks.right_x < 0.35);
-        assert!(clicks.right_y < -0.5);
-        assert_eq!(stick_with_deadzone(0.005), 0.0);
-        assert_eq!(
-            mouse_click_pad(
-                KeyboardLayout::Classic,
-                Some(MouseState {
-                    buttons: 0x7,
-                    ..Default::default()
-                }),
-                (0.5, 0.5),
-            ),
-            PadState::default()
-        );
-    }
-
-    #[test]
-    fn azerty_latch_keeps_quick_fire_threaten_and_talk_clicks_across_slow_frames() {
-        let mut latch = InputLatch::default();
-        let aim = PadState {
-            left_trigger: 1.0,
-            ..Default::default()
-        };
-        // Player holds RMB (LT) and does a brief 50ms tap of LMB (RT fire) + Space (X threaten) + E (A talk).
-        let pressed = PadState {
-            buttons: X | A,
-            left_trigger: 1.0,
-            right_trigger: 1.0,
-            ..Default::default()
-        };
-        let p0 = latch.apply(pressed, 10_000, 100);
-        assert_eq!((p0.buttons, p0.left_trigger, p0.right_trigger), (X | A, 1.0, 1.0));
-        // 50ms later player releases LMB, Space and E while still holding RMB, before the game reads a frame.
-        let p1 = latch.apply(aim, 60_000, 100);
-        assert_eq!((p1.buttons, p1.left_trigger, p1.right_trigger), (X | A, 1.0, 1.0));
-        // After 1 game read, still latched for reliability.
-        let p2 = latch.apply(aim, 100_000, 101);
-        assert_eq!((p2.buttons, p2.left_trigger, p2.right_trigger), (X | A, 1.0, 1.0));
-        // After 2 game reads, released cleanly while RMB aim remains held.
-        let p3 = latch.apply(aim, 140_000, 102);
-        assert_eq!((p3.buttons, p3.left_trigger, p3.right_trigger), (0, 1.0, 0.0));
-        // Safety deadline (220ms) also releases even with 0 reads.
-        let _ = latch.apply(pressed, 300_000, 102);
-        let p4 = latch.apply(aim, 600_000, 102);
-        assert_eq!((p4.buttons, p4.left_trigger, p4.right_trigger), (0, 1.0, 0.0));
     }
 
     #[test]

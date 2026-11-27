@@ -741,6 +741,7 @@ select:focus,input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(16
         <select id="opt-resolution">
           <option value="1080p" data-i18n="res_1080">1080p</option>
           <option value="1080p-hq" data-i18n="res_1080_hq">1080p · Qualité</option>
+          <option value="1440p" data-i18n="res_1440">1440p · DLSS</option>
           <option value="720p" data-i18n="res_720">720p · Performance</option>
           <option value="4k" data-i18n="res_4k">4K · Ultra</option>
         </select>
@@ -748,9 +749,33 @@ select:focus,input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(16
 
       <div class="row">
         <div class="row-label">
+          <strong data-i18n="dlss_label">NVIDIA DLSS</strong>
+          <small id="dlss-hint" data-i18n="dlss_hint">Super Resolution RTX (net + rapide)</small>
+        </div>
+        <label class="switch"><input id="opt-dlss" type="checkbox" checked><span class="slider"></span></label>
+      </div>
+
+      <div class="row">
+        <div class="row-label">
+          <strong data-i18n="fg_label">DLSS Frame Gen 2×</strong>
+          <small data-i18n="fg_hint">Natif RTX 40 sans bavures HUD (remplace Smooth Motion)</small>
+        </div>
+        <label class="switch"><input id="opt-fg" type="checkbox"><span class="slider"></span></label>
+      </div>
+
+      <div class="row">
+        <div class="row-label">
           <strong data-i18n="sm_label">Smooth Motion</strong>
         </div>
         <label class="switch"><input id="opt-sm" type="checkbox" checked><span class="slider"></span></label>
+      </div>
+
+      <div class="row">
+        <div class="row-label">
+          <strong data-i18n="skip_intro_label">Passer les intros</strong>
+          <small data-i18n="skip_intro_hint">Chargement direct sans vidéos Bink</small>
+        </div>
+        <label class="switch"><input id="opt-skip-intro" type="checkbox" checked><span class="slider"></span></label>
       </div>
 
       <div class="row">
@@ -920,9 +945,16 @@ const I18N = {
     res_label: "Résolution",
     res_1080: "1080p",
     res_1080_hq: "1080p · Qualité",
+    res_1440: "1440p · DLSS",
     res_720: "720p · Performance",
     res_4k: "4K · Ultra",
+    dlss_label: "NVIDIA DLSS",
+    dlss_hint: "Super Resolution RTX (net + rapide)",
+    fg_label: "DLSS Frame Gen 2×",
+    fg_hint: "Natif RTX 40 sans bavures HUD (remplace Smooth Motion)",
     sm_label: "Smooth Motion",
+    skip_intro_label: "Passer les intros",
+    skip_intro_hint: "Chargement direct sans vidéos Bink",
     rt_label: "Ray Tracing",
     version_label: "Version du moteur",
     fast_gpu_label: "Accélération GPU RTX",
@@ -1025,9 +1057,16 @@ const I18N = {
     res_label: "Resolution",
     res_1080: "1080p",
     res_1080_hq: "1080p · Quality",
+    res_1440: "1440p · DLSS",
     res_720: "720p · Performance",
     res_4k: "4K · Ultra",
+    dlss_label: "NVIDIA DLSS",
+    dlss_hint: "RTX Super Resolution (sharp + fast)",
+    fg_label: "DLSS Frame Gen 2×",
+    fg_hint: "Native RTX 40 HUD-clean (replaces Smooth Motion)",
     sm_label: "Smooth Motion",
+    skip_intro_label: "Skip intro videos",
+    skip_intro_hint: "Faster loading without Bink intros",
     rt_label: "Ray Tracing",
     version_label: "Engine build",
     fast_gpu_label: "RTX GPU Acceleration",
@@ -1247,13 +1286,16 @@ let msgKey = "msg_ready";
   requestAnimationFrame(draw);
 })();
 
-const PREF_KEY = "vice_studio_prefs_v5";
+const PREF_KEY = "vice_studio_prefs_v6";
 function loadPrefs() {
   try {
     const p = JSON.parse(localStorage.getItem(PREF_KEY) || "{}");
     if (p.lang === "fr" || p.lang === "en") lang = p.lang;
     if (p.resolution) $("opt-resolution").value = p.resolution;
+    if (typeof p.dlss === "boolean") $("opt-dlss").checked = p.dlss;
+    if (typeof p.frameGen === "boolean") $("opt-fg").checked = p.frameGen;
     if (typeof p.smoothMotion === "boolean") $("opt-sm").checked = p.smoothMotion;
+    if (typeof p.skipIntro === "boolean") $("opt-skip-intro").checked = p.skipIntro;
     if (typeof p.bvhBuilder === "boolean") $("opt-rt").checked = p.bvhBuilder;
     if (typeof p.fastGpu === "boolean") $("opt-fast").checked = p.fastGpu;
     if (typeof p.dstorageNotify === "boolean") $("opt-dstorage").checked = p.dstorageNotify;
@@ -1264,7 +1306,10 @@ function savePrefs() {
     localStorage.setItem(PREF_KEY, JSON.stringify({
       lang,
       resolution: $("opt-resolution").value,
+      dlss: $("opt-dlss").checked,
+      frameGen: $("opt-fg").checked,
       smoothMotion: $("opt-sm").checked,
+      skipIntro: $("opt-skip-intro").checked,
       bvhBuilder: $("opt-rt").checked,
       fastGpu: $("opt-fast").checked,
       dstorageNotify: $("opt-dstorage").checked,
@@ -1295,7 +1340,17 @@ function applyLanguage(newLang) {
 
 document.querySelectorAll(".lang-btn").forEach(b => b.onclick = () => applyLanguage(b.dataset.lang));
 $("opt-lang").onchange = () => applyLanguage($("opt-lang").value);
-["opt-resolution","opt-sm","opt-rt","opt-fast","opt-dstorage"].forEach(id => $(id).addEventListener("change", savePrefs));
+["opt-resolution","opt-dlss","opt-fg","opt-sm","opt-skip-intro","opt-rt","opt-fast","opt-dstorage"].forEach(id => $(id).addEventListener("change", () => {
+  if (id === "opt-fg" && $("opt-fg").checked) {
+    $("opt-dlss").checked = true;
+    $("opt-sm").checked = false;
+  } else if (id === "opt-sm" && $("opt-sm").checked) {
+    $("opt-fg").checked = false;
+  } else if (id === "opt-dlss" && !$("opt-dlss").checked) {
+    $("opt-fg").checked = false;
+  }
+  savePrefs();
+}));
 loadPrefs();
 
 // Intro cinématique d'ouverture
@@ -1622,7 +1677,10 @@ $("btn-play").onclick = async () => {
         body: JSON.stringify({
           version: $("opt-version").value,
           resolution: $("opt-resolution").value,
+          dlss: $("opt-dlss").checked,
+          frameGen: $("opt-fg").checked,
           smoothMotion: $("opt-sm").checked,
+          skipIntro: $("opt-skip-intro").checked,
           bvhBuilder: $("opt-rt").checked,
           fastGpu: $("opt-fast").checked,
           dstorageNotify: $("opt-dstorage").checked,
