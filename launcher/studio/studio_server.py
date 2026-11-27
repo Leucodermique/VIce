@@ -580,10 +580,28 @@ def launch_game(cfg, developer):
     if not developer:
         version = "victory.exe"
     sl_dir = resolve_streamline_dir()
-    dlss_wanted = bool(cfg.get("dlss", True)) and (sl_dir is not None)
-    framegen_wanted = bool(cfg.get("frameGen", False)) and dlss_wanted
-    # Never stack NVIDIA Smooth Motion on top of native DLSS Frame Generation.
-    smooth_motion = bool(cfg.get("smoothMotion", True)) and not framegen_wanted
+    # Unified "fluidity" control: dlss-fg | smooth-motion | dlss | native
+    fluidity = str(cfg.get("fluidity", "")).strip().lower()
+    if fluidity == "dlss-fg":
+        dlss_wanted = sl_dir is not None
+        framegen_wanted = dlss_wanted
+        smooth_motion = not framegen_wanted
+    elif fluidity == "smooth-motion":
+        dlss_wanted = sl_dir is not None
+        framegen_wanted = False
+        smooth_motion = True
+    elif fluidity == "dlss":
+        dlss_wanted = sl_dir is not None
+        framegen_wanted = False
+        smooth_motion = False
+    elif fluidity == "native":
+        dlss_wanted = False
+        framegen_wanted = False
+        smooth_motion = False
+    else:
+        dlss_wanted = bool(cfg.get("dlss", True)) and (sl_dir is not None)
+        framegen_wanted = bool(cfg.get("frameGen", False)) and dlss_wanted
+        smooth_motion = bool(cfg.get("smoothMotion", True)) and not framegen_wanted
     skip_intro = bool(cfg.get("skipIntro", True))
     engine = resolve_engine(version, smooth_motion=smooth_motion)
     if not engine.is_file():
@@ -649,11 +667,14 @@ def launch_game(cfg, developer):
     env["VICTORY_RAW_VIEW_CLAMP"] = "1"
 
     # Zero-copy 32-bit constants heap, write-combined GPU persistence (-5 ms/frame),
-    # and soft views (eliminates cutscene cut freezes).
+    # lock-free write-fault guard opening (-25 ms/frame guard wait) and soft views
+    # (eliminates cutscene cut freezes).
     env["VICTORY_PORT_CONSTANTS"] = "1"
     env["VICTORY_WC_NO_BACK"] = "1"
     env["VICTORY_WC_NO_BACK_MIN_KB"] = "1024"
     env["VICTORY_SOFT_VIEWS"] = "copies"
+    env["VICTORY_FAULT_UNLOCKED"] = "1"
+    env["VICTORY_GUARD_HOT"] = "50"
 
     # Fast in-place descriptor heap sync + null-descriptor skip.
     env["VICTORY_HEAP_SYNC_FIRST"] = "1"
