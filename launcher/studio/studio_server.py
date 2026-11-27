@@ -249,8 +249,9 @@ def verify_password(password):
 
 
 def _sync_smooth_motion_exe(src: Path) -> Path:
-    """Keep victory_sm.exe synced next to src so NVIDIA App Smooth Motion applies automatically."""
-    sm = src.with_name("victory_sm.exe")
+    """Sync victory_sm.exe to target/diag/victory_sm.exe (exact installDirectory registered in NVIDIA App for Smooth Motion)."""
+    diag_dir = ENGINE / "target" / "diag"
+    sm = (diag_dir / "victory_sm.exe") if diag_dir.is_dir() else src.with_name("victory_sm.exe")
     try:
         if not sm.is_file() or src.stat().st_mtime > sm.stat().st_mtime or src.stat().st_size != sm.stat().st_size:
             shutil.copy2(src, sm)
@@ -600,13 +601,10 @@ def launch_game(cfg, developer):
     bvh_builder = bool(cfg.get("bvhBuilder", False))
 
     if fast_gpu:
-        # VIce Laptop / Low-VRAM Profile (8 GB VRAM / 16 GB RAM, Native + Smooth Motion):
-        # - VICTORY_WINDOWS_BAR_MB=1024 + WINDOW_KB=1024 + WINDOW_TAILS=1 + AWAY_MS=3000:
-        #   balances 8 GB VRAM (auto-capped at 80% budget) & 16 GB RAM (prevents 0x8007000E OOM).
-        # - VICTORY_PORT_CONSTANTS=1: keeps the 174 MB 32-bit graphics heap in place (zero copy/hash).
-        # - VICTORY_WC_NO_BACK=1: skips ~16 ms/frame write-combined copy-back & GPU compares.
-        # - VICTORY_EARLY_DEPTH=1: fixes glass-behind-hair depth/motion-vector bleed + cuts overdraw.
-        # - VICTORY_SHARPEN=0.18: crisp native detail without amplifying dithered hair grain.
+        # Clean, battle-tested f5af9b62 Laptop / Low-VRAM profile (8 GB VRAM / 16 GB RAM, Native + Smooth Motion):
+        # Zero experimental flags (no WC_NO_BACK, no PORT_CONSTANTS, no EARLY_DEPTH, no SPREAD/SEND_BAR).
+        # Runs on pure --release AVX2 + fat LTO + mimalloc + D3D12 SetResidencyPriority,
+        # synced to target/diag/victory_sm.exe so NVIDIA App Smooth Motion triggers reliably.
         env["VICTORY_TEXTURE_NO_WAIT"] = "1"
         env["VICTORY_RELAY"] = "2"
         env["VICTORY_CARD_STEPS"] = "2"
@@ -629,20 +627,17 @@ def launch_game(cfg, developer):
         env["VICTORY_JOIN_PARTS"] = "8"
         env["VICTORY_UPLOAD_AHEAD"] = "1"
         env["VICTORY_PIPELINE_WAIT_MS"] = "250"
-        env["VICTORY_LATE_WAIT_LISTS"] = "256"
+        env["VICTORY_LATE_WAIT_LISTS"] = "512"
         env["VICTORY_WIDE_THREADS"] = "12"
         env["VICTORY_LAND_THREADS"] = "10"
         env["VICTORY_LAND_SKIP"] = "1"
-        env["VICTORY_WIDE_SPIN"] = "100"
-        env["VICTORY_SPREAD"] = "1"
-        env["VICTORY_SEND_BAR"] = "1"
         env["VICTORY_DYNAMIC_SLOTS"] = "524288"
         env["VICTORY_SYNC_NULL_SKIP"] = "1"
         env["VICTORY_RENDER_SCALE"] = render_scale
         env["VICTORY_OWN_UPSCALER"] = "1"
         env["VICTORY_BVH_MISS"] = "0" if bvh_builder else "1"
         env["VICTORY_CARD_BUFFERS_MIN_MB"] = "1"
-        env["VICTORY_CARD_BUFFERS_MB"] = "768"
+        env["VICTORY_CARD_BUFFERS_MB"] = "896"
         env["VICTORY_CARD_ROOM_FOR_TARGETS_MB"] = "1024"
         env["VICTORY_TEXTURE_ROOM_PERCENT"] = "97"
         env["VICTORY_TEXTURE_DROP_MIPS"] = "1"
@@ -653,14 +648,9 @@ def launch_game(cfg, developer):
         env["VICTORY_BAKE_TEXTURES_MS"] = "2500"
         env["VICTORY_HEAP_RECHECK_EVERY"] = "30"
         env["VICTORY_COMPOSE"] = "1"
-        env["VICTORY_SHARPEN"] = "0"
+        env["VICTORY_SHARPEN"] = "0.35"
         env["VICTORY_PC_PROMPTS"] = "1"
-        env["VICTORY_WINDOWS_BAR_MB"] = "1024"
-        env["VICTORY_WINDOW_KB"] = "1024"
-        env["VICTORY_WINDOW_TAILS"] = "1"
-        env["VICTORY_WC_NO_BACK"] = "1"
-        env["VICTORY_PORT_CONSTANTS"] = "1"
-        env["VICTORY_EARLY_DEPTH"] = "1"
+        env["VICTORY_WINDOWS_BAR_MB"] = "2048"
         env["VICTORY_NO_WATCHDOG"] = "1"
         env["MIMALLOC_PURGE_DELAY"] = "100"
     else:
@@ -687,20 +677,17 @@ def launch_game(cfg, developer):
         env["VICTORY_JOIN_PARTS"] = "8"
         env["VICTORY_UPLOAD_AHEAD"] = "1"
         env["VICTORY_PIPELINE_WAIT_MS"] = "250"
-        env["VICTORY_LATE_WAIT_LISTS"] = "256"
+        env["VICTORY_LATE_WAIT_LISTS"] = "512"
         env["VICTORY_WIDE_THREADS"] = "12"
         env["VICTORY_LAND_THREADS"] = "10"
         env["VICTORY_LAND_SKIP"] = "1"
-        env["VICTORY_WIDE_SPIN"] = "100"
-        env["VICTORY_SPREAD"] = "1"
-        env["VICTORY_SEND_BAR"] = "1"
         env["VICTORY_DYNAMIC_SLOTS"] = "524288"
         env["VICTORY_SYNC_NULL_SKIP"] = "1"
         env["VICTORY_RENDER_SCALE"] = render_scale
         env["VICTORY_OWN_UPSCALER"] = "1"
         env["VICTORY_BVH_MISS"] = "0" if bvh_builder else "1"
         env["VICTORY_CARD_BUFFERS_MIN_MB"] = "1"
-        env["VICTORY_CARD_BUFFERS_MB"] = "768"
+        env["VICTORY_CARD_BUFFERS_MB"] = "896"
         env["VICTORY_CARD_ROOM_FOR_TARGETS_MB"] = "1024"
         env["VICTORY_TEXTURE_ROOM_PERCENT"] = "97"
         env["VICTORY_TEXTURE_DROP_MIPS"] = "1"
@@ -711,14 +698,9 @@ def launch_game(cfg, developer):
         env["VICTORY_BAKE_TEXTURES_MS"] = "2500"
         env["VICTORY_HEAP_RECHECK_EVERY"] = "30"
         env["VICTORY_COMPOSE"] = "1"
-        env["VICTORY_SHARPEN"] = "0"
+        env["VICTORY_SHARPEN"] = "0.35"
         env["VICTORY_PC_PROMPTS"] = "1"
-        env["VICTORY_WINDOWS_BAR_MB"] = "1024"
-        env["VICTORY_WINDOW_KB"] = "1024"
-        env["VICTORY_WINDOW_TAILS"] = "1"
-        env["VICTORY_WC_NO_BACK"] = "1"
-        env["VICTORY_PORT_CONSTANTS"] = "1"
-        env["VICTORY_EARLY_DEPTH"] = "1"
+        env["VICTORY_WINDOWS_BAR_MB"] = "2048"
         env["VICTORY_NO_WATCHDOG"] = "1"
         env["MIMALLOC_PURGE_DELAY"] = "100"
 
