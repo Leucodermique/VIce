@@ -1,0 +1,59 @@
+name: VIce Discord announcements
+on:
+  push:
+    branches: [main]
+  release:
+    types: [published]
+  workflow_dispatch:
+permissions: {}
+jobs:
+  announce:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      RELEASE_WEBHOOK: ${{ secrets.VICE_RELEASE_WEBHOOK }}
+      DEV_WEBHOOK: ${{ secrets.VICE_DEV_WEBHOOK }}
+    steps:
+      - name: Send branded Discord embeds
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os, json, urllib.request, urllib.error, datetime
+          with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as f:
+              event=json.load(f)
+          kind=os.environ["GITHUB_EVENT_NAME"]
+          repo="https://github.com/Leucodermique/VIce"
+          def clean(s, n=1000):
+              return str(s or "").replace("@", "@\u200b")[:n]
+          def send(key,embed):
+              url=os.environ.get(key)
+              if not url: raise SystemExit("Missing configured webhook secret")
+              embed["footer"]={"text":"VIce Studio  •  Official GitHub updates"}
+              embed["timestamp"]=datetime.datetime.now(datetime.timezone.utc).isoformat()
+              data={"username":"VIce Studio","embeds":[embed],"allowed_mentions":{"parse":[]}}
+              req=urllib.request.Request(url,json.dumps(data,ensure_ascii=False).encode(),{"Content-Type":"application/json","User-Agent":"VIce-GitHub-Alerts/1.0"},method="POST")
+              try:
+                  with urllib.request.urlopen(req,timeout=20) as res: print("Discord delivery:",res.status)
+              except urllib.error.HTTPError as e: raise SystemExit("Discord delivery failed: HTTP "+str(e.code)) from None
+          if kind=="release" or kind=="workflow_dispatch":
+              r=event.get("release",{})
+              test=kind=="workflow_dispatch"
+              tag=clean(r.get("tag_name","preview"),200)
+              assets=r.get("assets",[])
+              fields=[{"name":"🏷️ Version","value":tag,"inline":True},{"name":"📦 Channel","value":"Pre-release" if r.get("prerelease") else ("Test" if test else "Stable"),"inline":True},{"name":"⬇️ Downloads","value":str(len(assets))+" release assets","inline":True}]
+              if assets:
+                  fields.append({"name":"📁 Files","value":clean("\n".join("• "+a.get("name","file") for a in assets[:8]),1000)})
+              send("RELEASE_WEBHOOK",{"author":{"name":"VIce  /  RELEASES","url":repo},"title":("🧪 Preview — " if test else "🚀 New release — ")+clean(r.get("name") or tag,210),"url":r.get("html_url",repo+"/releases"),"description":clean(r.get("body") or ("This is a test of the new release notification." if test else "A new VIce build has been published."),3500),"color":0xA855F7,"fields":fields})
+          if kind=="push" or kind=="workflow_dispatch":
+              test=kind=="workflow_dispatch"
+              commits=event.get("commits",[])
+              if kind=="push" and not commits: raise SystemExit(0)
+              branch=event.get("ref","refs/heads/main").removeprefix("refs/heads/")
+              lines=[]
+              for c in commits[:8]:
+                  sha=clean(c.get("id",""),7)
+                  message=clean(c.get("message","").splitlines()[0] if c.get("message") else "Update",130)
+                  lines.append("[\x60"+sha+"\x60]("+repo+"/commit/"+c.get("id","")+")  "+message)
+              if len(commits)>8: lines.append("… and "+str(len(commits)-8)+" more")
+              send("DEV_WEBHOOK",{"author":{"name":"VIce  /  DEVELOPMENT","url":repo},"title":"🧪 Preview — Development update" if test else "⚡ New development update","url":event.get("compare",repo+"/commits/main"),"description":"\n".join(lines) or "This is a test of the new commit notification.","color":0xF04EC4,"fields":[{"name":"🌿 Branch","value":clean(branch,100),"inline":True},{"name":"🛠️ Commits","value":str(len(commits)),"inline":True},{"name":"👤 Contributor","value":clean(event.get("pusher",{}).get("name") or event.get("sender",{}).get("login","VIce"),100),"inline":True}]})
+          PY
