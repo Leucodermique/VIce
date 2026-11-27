@@ -1757,6 +1757,22 @@ pub(crate) fn room(memory: Option<[u64; 4]>) -> bool {
     }
 }
 
+/// Dedicated headroom check for small/detail textures (<= 512 KiB: secondary NPC
+/// faces, eyes, background lights, decals, props). Stays open up to 97% of the
+/// VRAM budget even after large environment textures pause at `room_percent()`,
+/// so scenes finish loading completely without dropping detail textures.
+#[cfg(windows)]
+pub(crate) fn room_detail(memory: Option<[u64; 4]>) -> bool {
+    match memory {
+        Some([budget, used, ..]) => {
+            let detail_pct = room_percent().max(97);
+            used.saturating_sub(crate::pool::texture_room()) + crate::shadow::card_room_kept() + targets_room_kept()
+                < budget / 100 * detail_pct
+        }
+        None => true,
+    }
+}
+
 /// The bytes of the card's memory the texture queue leaves free for
 /// render targets and other host copies the host itself writes that are
 /// not made yet: `VICTORY_CARD_ROOM_FOR_TARGETS_MB` (3,072; 0: none, as
@@ -2101,15 +2117,22 @@ pub(crate) fn let_go_idle() {
     // and the first one.
     let (mut went, mut bytes, mut first) = (0u64, 0u64, None);
     let all = textures();
-    // With a limit, the longest idle first.
-    let mut by_age: Vec<(u64, usize)> = Vec::new();
+    // With a limit, reclaim large idle environment textures before small detail/NPC
+    // textures (<= 512px), and longest idle first within each tier.
+    let mut by_age: Vec<(u8, u64, usize)> = Vec::new();
     if most != u64::MAX {
+        let small_idle_ms = idle_ms.saturating_mul(2);
         for &at in all.iter() {
             // SAFETY: as below.
             let r = unsafe { &*(at as *const Resource) };
             let used = r.host.used.load(Relaxed);
-            if used != 0 && fills(&r.desc) && crate::host::long_ago(used, idle_ms, IDLE_FRAMES) {
-                by_age.push((used & 0xffff_ffff, at));
+            if used == 0 || !fills(&r.desc) {
+                continue;
+            }
+            let is_small = r.desc.width <= 512 && r.desc.height <= 512;
+            let req_ms = if is_small { small_idle_ms } else { idle_ms };
+            if crate::host::long_ago(used, req_ms, IDLE_FRAMES) {
+                by_age.push((u8::from(is_small), used & 0xffff_ffff, at));
             }
         }
         by_age.sort_unstable();
@@ -2131,8 +2154,16 @@ pub(crate) fn let_go_idle() {
     let from = if part == PART { FROM.load(Relaxed) } else { 0 };
     let mut looked = 0;
     let began = std::time::Instant::now();
-    for at in all.range(from..).take(part).copied().chain(by_age.iter().map(|&(_, at)| at)) {
+    for at in all.range(from..).take(part).copied().chain(by_age.iter().map(|&(_, _, at)| at)) {
         if bytes >= most {
+            break;
+        }
+        // Bound per-frame sweep work to <= 3 ms once at least one idle texture
+        // was reclaimed, eliminating ~100 ms camera-turn stalls on 8 GB laptops.
+        if went > 0 && (looked & 63) == 0 && began.elapsed().as_micros() >= 3_000 {
+            if part == PART {
+                FROM.store(at, Relaxed);
+            }
             break;
         }
         looked += 1;

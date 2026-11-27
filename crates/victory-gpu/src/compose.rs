@@ -37,7 +37,7 @@ pub fn set_real_pad_connected(connected: bool) {
 }
 
 const SOURCE: &str = r#"
-#define RS "RootConstants(num32BitConstants=5, b0), DescriptorTable(SRV(t0, numDescriptors=3), UAV(u0, numDescriptors=2)), StaticSampler(s0, filter=FILTER_MIN_MAG_MIP_LINEAR, addressU=TEXTURE_ADDRESS_CLAMP, addressV=TEXTURE_ADDRESS_CLAMP)"
+#define RS "RootConstants(num32BitConstants=6, b0), DescriptorTable(SRV(t0, numDescriptors=3), UAV(u0, numDescriptors=2)), StaticSampler(s0, filter=FILTER_MIN_MAG_MIP_LINEAR, addressU=TEXTURE_ADDRESS_CLAMP, addressV=TEXTURE_ADDRESS_CLAMP)"
 
 cbuffer Params : register(b0) {
     uint w;
@@ -45,6 +45,7 @@ cbuffer Params : register(b0) {
     uint premultiplied;
     float sharpen;
     uint pc_prompts;
+    float vibrance;
 };
 
 Texture2D<float4> game : register(t0);
@@ -641,12 +642,37 @@ float3 sharpen_game(int2 p) {
     return saturate(res);
 }
 
+// Vice City vitality color-grading pass (game plane only, never touches UI/HUD/prompts):
+// 1) Gentle shadow lift for indoor readability without washing out pure blacks.
+// 2) Smart vibrance that enriches muted/mid-saturated colors while protecting skin tones
+//    and already-vivid highlights from clipping.
+// 3) Subtle filmic S-curve contrast for crisp depth and lively light response.
+float3 grade_game(float3 c) {
+    if (vibrance <= 0.001) return c;
+    float luma = dot(c, LUMA);
+    float shadow_mask = smoothstep(0.015, 0.22, luma) * (1.0 - smoothstep(0.32, 0.78, luma));
+    c += c * (0.14 * vibrance * shadow_mask) + float3(0.012, 0.011, 0.010) * (vibrance * shadow_mask);
+
+    float hi = max(c.r, max(c.g, c.b));
+    float lo = min(c.r, min(c.g, c.b));
+    float sat = (hi > 1e-4) ? ((hi - lo) / hi) : 0.0;
+    float l2 = dot(c, LUMA);
+    float luma_guard = smoothstep(0.03, 0.14, l2) * (1.0 - smoothstep(0.84, 0.99, l2));
+    float skin = saturate(1.0 - abs(c.r - c.g * 1.28) * 3.0) * smoothstep(0.05, 0.20, c.r - c.b);
+    float vib_boost = vibrance * (1.0 - sat * 0.72) * luma_guard * (1.0 - 0.30 * skin);
+    c = lerp(float3(l2, l2, l2), c, 1.0 + vib_boost * 1.15);
+
+    float3 s_curve = c * c * (3.0 - 2.0 * c);
+    c = lerp(c, s_curve, 0.14 * vibrance);
+    return saturate(c);
+}
+
 [RootSignature(RS)]
 [numthreads(8, 8, 1)]
 void main(uint3 id : SV_DispatchThreadID) {
     if (id.x >= w || id.y >= h) return;
     float2 uv = (float2(id.xy) + 0.5) / float2(w, h);
-    float3 g = sharpen_game(int2(id.xy));
+    float3 g = grade_game(sharpen_game(int2(id.xy)));
     float4 u = ui.SampleLevel(linear_clamp, uv, 0);
 
     if (pc_prompts != 0u) {
@@ -951,6 +977,17 @@ fn sharpen_amount() -> f32 {
     })
 }
 
+fn vibrance_amount() -> f32 {
+    static AMT: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+    *AMT.get_or_init(|| {
+        std::env::var("VICTORY_VIBRANCE")
+            .ok()
+            .and_then(|v| v.trim().parse::<f32>().ok())
+            .map(|v| v.clamp(0.0, 1.0))
+            .unwrap_or(0.0)
+    })
+}
+
 fn pc_prompts_enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("VICTORY_PC_PROMPTS").is_some_and(|v| v != "0"))
@@ -984,6 +1021,7 @@ pub(crate) fn record(
                 tracing::info!(
                     premultiplied = premultiplied(),
                     sharpen = sharpen_amount(),
+                    vibrance = vibrance_amount(),
                     pc_prompts = pc_prompts_enabled(),
                     "present planes: the interface is laid over the game"
                 );
@@ -1127,12 +1165,13 @@ pub(crate) fn record(
     }
 
     let do_prompts = pc_prompts_enabled() && !REAL_PAD_CONNECTED.load(Ordering::Relaxed);
-    let constants: [u32; 5] = [
+    let constants: [u32; 6] = [
         w as u32,
         h,
         u32::from(premultiplied()),
         sharpen_amount().to_bits(),
         u32::from(do_prompts),
+        vibrance_amount().to_bits(),
     ];
 
     let uav_barrier = [D3D12_RESOURCE_BARRIER {
@@ -1156,7 +1195,7 @@ pub(crate) fn record(
         list.ResourceBarrier(&before);
         list.SetDescriptorHeaps(&[Some(pass.views.clone())]);
         list.SetComputeRootSignature(&pass.root);
-        list.SetComputeRoot32BitConstants(0, 5, constants.as_ptr().cast(), 0);
+        list.SetComputeRoot32BitConstants(0, 6, constants.as_ptr().cast(), 0);
         list.SetComputeRootDescriptorTable(1, gpu);
 
         if do_prompts {

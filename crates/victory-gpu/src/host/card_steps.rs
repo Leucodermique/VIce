@@ -108,10 +108,13 @@ const BEHIND_PLACED: &str = "a copy at its place in a list writes what it reads,
 
 /// The bytes of our buffer between reading and writing: what one submission
 /// may do this way (each place read once, however many fills take it).
-const BETWEEN: u64 = 4 << 20;
+/// Raised from 4 MiB to 8 MiB: dense gameplay frames fill 4.5-6 MiB of
+/// constants, and refusing a submission stalled the frame by 30-38 ms.
+const BETWEEN: u64 = 8 << 20;
 
 /// The most steps of a submission done this way.
-const MOST: usize = 12288;
+/// Raised from 12,288 to 24,576: gameplay frames routinely reach ~12,000 fills.
+const MOST: usize = 24576;
 
 /// How a fill's bytes get where its list reads them, if the card brings
 /// them.
