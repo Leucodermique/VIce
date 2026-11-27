@@ -30,7 +30,9 @@ jobs:
               if not url: raise SystemExit("Missing configured webhook secret")
               embed["footer"]={"text":"VIce Studio  •  Official GitHub updates"}
               embed["timestamp"]=datetime.datetime.now(datetime.timezone.utc).isoformat()
-              data={"username":"VIce Studio","embeds":[embed],"allowed_mentions":{"parse":[]}}
+              art="https://raw.githubusercontent.com/Leucodermique/VIce/main/.github/assets/discord/"
+              embed["image"]={"url":art+("release.png" if key=="RELEASE_WEBHOOK" else "development.png")}
+              data={"username":"VIce Studio","avatar_url":art+"icon.png","embeds":[embed],"allowed_mentions":{"parse":[]}}
               req=urllib.request.Request(url,json.dumps(data,ensure_ascii=False).encode(),{"Content-Type":"application/json","User-Agent":"VIce-GitHub-Alerts/1.0"},method="POST")
               try:
                   with urllib.request.urlopen(req,timeout=20) as res: print("Discord delivery:",res.status)
