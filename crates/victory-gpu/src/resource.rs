@@ -510,6 +510,7 @@ fn twin_texture(
         return None;
     };
     let _ = crate::host::resident(&host.device, &texture);
+    crate::host::set_residency_priority(&host.device, &texture, D3D12_RESIDENCY_PRIORITY_HIGH);
     crate::host::name(&texture, || {
         format!("depth twin {}x{} f{}", d.width, d.height, d.format)
     });
@@ -571,6 +572,7 @@ fn twin_texture(
         }
         texture.map(|texture| {
             let _ = crate::host::resident(&host.device, &texture);
+            crate::host::set_residency_priority(&host.device, &texture, D3D12_RESIDENCY_PRIORITY_HIGH);
             crate::host::name(&texture, || {
                 format!("depth plane twin {}x{} f{}", d.width, d.height, d.format)
             });
@@ -2587,6 +2589,16 @@ fn host_texture_as(
         texture = None;
     }
     if let Some(t) = &texture {
+        if !reserved {
+            // Keep render targets (flag 1) and depth-stencil targets (flag 2)
+            // pinned at HIGH residency priority on 8 GB VRAM GPUs.
+            let prio = if (d.flags & 3) != 0 {
+                D3D12_RESIDENCY_PRIORITY_HIGH
+            } else {
+                D3D12_RESIDENCY_PRIORITY_NORMAL
+            };
+            crate::host::set_residency_priority(&host.device, t, prio);
+        }
         crate::host::name(t, || {
             format!("texture {}x{} f{} flags {:#x}", d.width, d.height, d.format, d.flags)
         });

@@ -3,6 +3,10 @@
 //! Every command reads the user's own files and writes only to stdout or to
 //! the user's cache directory (outside the repository).
 
+#[cfg(windows)]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 mod census;
 mod inspect;
 #[cfg(all(windows, feature = "diagnostics"))]

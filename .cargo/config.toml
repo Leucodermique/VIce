@@ -1,2 +1,8 @@
 [alias]
 xtask = "run --quiet --package xtask --"
+
+# Target x86-64-v3 (AVX2, BMI1/2, FMA, POPCNT, LZCNT) on Windows: unlocks SIMD
+# vectorization in hashing, descriptor scanning, memory compares and BCn detiling
+# on every modern laptop/desktop CPU (Intel Haswell+ / AMD Excavator+).
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-cpu=x86-64-v3"]

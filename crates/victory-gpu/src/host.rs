@@ -346,6 +346,25 @@ pub(crate) fn resident(device: &ID3D12Device, object: &impl Interface) -> window
 /// Times, microseconds and the longest of [`resident`].
 static RESIDENT: [std::sync::atomic::AtomicU64; 3] = [const { std::sync::atomic::AtomicU64::new(0) }; 3];
 
+/// Sets the D3D12 residency priority of a heap or committed resource so WDDM on
+/// 8 GB VRAM laptops evicts streamed texture pools before active render targets
+/// or depth buffers (`ID3D12Device1::SetResidencyPriority`).
+pub(crate) fn set_residency_priority(
+    device: &ID3D12Device,
+    object: &impl Interface,
+    priority: D3D12_RESIDENCY_PRIORITY,
+) {
+    let Ok(dev1) = device.cast::<ID3D12Device1>() else {
+        return;
+    };
+    let Ok(pageable) = object.cast::<ID3D12Pageable>() else {
+        return;
+    };
+    let obj = Some(pageable);
+    // SAFETY: live device1 and pageable resource/heap owned by it.
+    let _ = unsafe { dev1.SetResidencyPriority(1, &obj, &priority) };
+}
+
 /// Whether memory the card was given stays with it while there is room (on
 /// by default; `VICTORY_KEEP_FREED=0`: it is given back as before). A shader
 /// that reads past a view (a raw load through a typed, structured or
