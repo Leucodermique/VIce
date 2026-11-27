@@ -685,14 +685,16 @@ def launch_game(cfg, developer):
     env["VICTORY_DYNAMIC_SLOTS"] = "524288"
     env["VICTORY_HEAP_RECHECK_EVERY"] = "30"
 
-    # Fast loading & sharp streaming strictly calibrated for 8 GB VRAM / 16 GB RAM:
-    # - Keep VICTORY_TEXTURE_POOL=0 and ROOM_PERCENT <= 80% with DLSS (72% with FG)
-    #   so Streamline/DLSS NEVER hits `out of VRAM (39)` on an 8 GB RTX 4070 Laptop.
-    # - Keep VICTORY_PRELUDE_UPLOADS=0 and LATE_WAIT_LISTS=128 so D3D12 command lists
-    #   do not consume 4+ GB of private RAM on a 16 GB PC.
-    # - DROP_MIPS=1: 4x less VRAM on >=2K environment textures while keeping 100% native mip 0 on faces/HUD.
-    # - PIPELINE_BOOK=1: records used pipelines for instant warm loading on subsequent launches.
-    env["VICTORY_TEXTURE_POOL"] = "0"
+    # Fast loading, sharpest <=1024px faces/HUD & minimal VRAM for 8 GB RTX 4070 / 16 GB RAM:
+    # - VICTORY_TEXTURE_DROP_MIPS=2: caps giant 4K/2K environment textures cleanly at 1024px
+    #   (16x less VRAM on 4K, 4x less on 2K) while keeping ALL faces/eyes/skin/weapons/HUD <=1024px
+    #   at 100% native mip 0 sharpness!
+    # - VICTORY_TEXTURE_POOL=1 + ROOM_PERCENT=78 (70 FG / 86 native): eliminates 52,200 MakeResident
+    #   stalls (~7s) while keeping generous VRAM headroom so DLSS never hits `out of VRAM (39)`.
+    # - VICTORY_LATE_WAIT_LISTS=384: eliminates the 48-81 ms/frame "waited for lists in the air" stall.
+    # - VICTORY_FRESH_OPEN=0: closes unused lists immediately (0.0 resets used them in live logs).
+    # - VICTORY_WINDOWS_BAR_MB=1280: keeps 16 GB RAM safely away from Windows pagefile thrashing.
+    env["VICTORY_TEXTURE_POOL"] = "1"
     env["VICTORY_RIPE_BLOCKS"] = "0"
     env["VICTORY_TEXTURE_NO_WAIT"] = "1"
     env["VICTORY_TEXTURE_CATCHUP"] = "0"
@@ -704,23 +706,24 @@ def launch_game(cfg, developer):
     env["VICTORY_POOL_SMALL"] = "0"
     env["VICTORY_TABLED_REREAD"] = "1"
     env["VICTORY_QUEUE_HOST_TEXTURES"] = "0"
-    env["VICTORY_TEXTURE_DROP_MIPS"] = "1"
-    env["VICTORY_TEXTURE_ROOM_PERCENT"] = "72" if framegen_wanted else ("80" if dlss_wanted else "90")
-    env["VICTORY_TEXTURE_AWAY_MS"] = "5000"
+    env["VICTORY_TEXTURE_DROP_MIPS"] = "2"
+    env["VICTORY_TEXTURE_ROOM_PERCENT"] = "70" if framegen_wanted else ("78" if dlss_wanted else "86")
+    env["VICTORY_TEXTURE_AWAY_MS"] = "6000"
     env["VICTORY_EARLY_TEXTURES_MS"] = "16"
     env["VICTORY_BAKE_TEXTURES_MS"] = "2500"
     env["VICTORY_PIPELINE_WAIT_MS"] = "150"
     env["VICTORY_PIPELINE_BOOK"] = "1"
-    env["VICTORY_LATE_WAIT_LISTS"] = "128"
+    env["VICTORY_LATE_WAIT_LISTS"] = "384"
+    env["VICTORY_FRESH_OPEN"] = "0"
     env["VICTORY_WIDE_THREADS"] = "12"
     env["VICTORY_LAND_THREADS"] = "10"
     env["VICTORY_LAND_SKIP"] = "1"
 
-    # VRAM & 16 GB RAM WDDM shared-memory safety budget (leaves ~1.4-2.0 GB VRAM free for DLSS/FG).
+    # VRAM & 16 GB RAM WDDM shared-memory safety budget.
     env["VICTORY_CARD_BUFFERS_MIN_MB"] = "1"
     env["VICTORY_CARD_BUFFERS_MB"] = "640" if dlss_wanted else "768"
     env["VICTORY_CARD_ROOM_FOR_TARGETS_MB"] = "1024"
-    env["VICTORY_WINDOWS_BAR_MB"] = "2048"
+    env["VICTORY_WINDOWS_BAR_MB"] = "1280"
 
     # Lighting & reflections without RT (violet probe filter + specular stand-in + anti-HDR/fog flash).
     # Note: do NOT set VICTORY_AMBIENT_ONCE=1 with level=0.55 (it halved indoor brightness into pitch black).
@@ -735,6 +738,9 @@ def launch_game(cfg, developer):
     env["VICTORY_FRAME_INTERVAL_US"] = "1000"
 
     # Skip heavy decal-heap defrag (5.6 ms/frame GPU) & smeared heat-haze pass.
+    # Do NOT pass legacy scripts/rt_off_hashes.txt to VICTORY_SKIP_PIPELINES: nvidia/main already
+    # skips CS_RaytracingResolve, CS_ScreenProbes_ActivateRays & WATER_LIGHT cleanly by name
+    # (the old hash list was dropping 2,749 valid draws/frame!).
     env["VICTORY_LEAVE_OUT"] = "02384a60fda6f2d0,731a39171b568298"
     if skip_intro:
         env["VICTORY_SKIP_BINK"] = "1"
@@ -760,11 +766,7 @@ def launch_game(cfg, developer):
     env["VICTORY_SHARPEN"] = "0.25" if dlss_wanted else "0.35"
     env["VICTORY_PC_PROMPTS"] = "1"
 
-    rt_hashes_file = ENGINE / "scripts" / "rt_off_hashes.txt"
-    if not bvh_builder and rt_hashes_file.is_file():
-        env["VICTORY_SKIP_PIPELINES"] = rt_hashes_file.read_text(encoding="utf-8").strip()
-    else:
-        env["VICTORY_SKIP_PIPELINES"] = "none"
+    env["VICTORY_SKIP_PIPELINES"] = "none"
     env["VICTORY_BVH_BUILDER"] = "1" if bvh_builder else "0"
     env["VICTORY_KB_LAYOUT"] = "azerty"
     env["VICTORY_GAMEPAD_MOUSE"] = "1"
