@@ -632,9 +632,6 @@ def launch_game(cfg, developer):
         env["VICTORY_LAND_THREADS"] = "10"
         env["VICTORY_LAND_SKIP"] = "1"
         env["VICTORY_COPY_PLAIN"] = "1"
-        env["VICTORY_FAULT_UNLOCKED"] = "1"
-        env["VICTORY_GUARD_HOT"] = "80"
-        env["VICTORY_WIDE_SPIN"] = "50"
         env["VICTORY_DYNAMIC_SLOTS"] = "327680"
         env["VICTORY_SYNC_NULL_SKIP"] = "1"
         env["VICTORY_RENDER_SCALE"] = render_scale
@@ -645,6 +642,10 @@ def launch_game(cfg, developer):
         env["VICTORY_CARD_ROOM_FOR_TARGETS_MB"] = "1280"
         env["VICTORY_TEXTURE_ROOM_PERCENT"] = "97"
         env["VICTORY_TEXTURE_DROP_MIPS"] = "1"
+        env["VICTORY_TEXTURE_FILL"] = "1"
+        env["VICTORY_PAGE_WRITES"] = "1"
+        env["VICTORY_LEVELS_ON_DEMAND"] = "1"
+        env["VICTORY_RELOOK_MS"] = "4000"
         env["VICTORY_TEXTURE_STAGE_MB"] = "256"
         env["VICTORY_TEXTURE_CATCHUP"] = "1"
         env["VICTORY_TEXTURE_AWAY_MS"] = "8000"
@@ -652,8 +653,9 @@ def launch_game(cfg, developer):
         env["VICTORY_BAKE_TEXTURES_MS"] = "2500"
         env["VICTORY_HEAP_RECHECK_EVERY"] = "30"
         env["VICTORY_COMPOSE"] = "1"
-        env["VICTORY_SHARPEN"] = "0.35"
+        env["VICTORY_SHARPEN"] = "0.22"
         env["VICTORY_PC_PROMPTS"] = "1"
+        env["VICTORY_FPS_COUNTER"] = "0"
         env["VICTORY_WINDOWS_BAR_MB"] = "1536"
         env["VICTORY_NO_WATCHDOG"] = "1"
         env["MIMALLOC_PURGE_DELAY"] = "100"
@@ -686,9 +688,6 @@ def launch_game(cfg, developer):
         env["VICTORY_LAND_THREADS"] = "10"
         env["VICTORY_LAND_SKIP"] = "1"
         env["VICTORY_COPY_PLAIN"] = "1"
-        env["VICTORY_FAULT_UNLOCKED"] = "1"
-        env["VICTORY_GUARD_HOT"] = "80"
-        env["VICTORY_WIDE_SPIN"] = "50"
         env["VICTORY_DYNAMIC_SLOTS"] = "327680"
         env["VICTORY_SYNC_NULL_SKIP"] = "1"
         env["VICTORY_RENDER_SCALE"] = render_scale
@@ -699,6 +698,10 @@ def launch_game(cfg, developer):
         env["VICTORY_CARD_ROOM_FOR_TARGETS_MB"] = "1280"
         env["VICTORY_TEXTURE_ROOM_PERCENT"] = "97"
         env["VICTORY_TEXTURE_DROP_MIPS"] = "1"
+        env["VICTORY_TEXTURE_FILL"] = "1"
+        env["VICTORY_PAGE_WRITES"] = "1"
+        env["VICTORY_LEVELS_ON_DEMAND"] = "1"
+        env["VICTORY_RELOOK_MS"] = "4000"
         env["VICTORY_TEXTURE_STAGE_MB"] = "256"
         env["VICTORY_TEXTURE_CATCHUP"] = "1"
         env["VICTORY_TEXTURE_AWAY_MS"] = "8000"
@@ -706,8 +709,9 @@ def launch_game(cfg, developer):
         env["VICTORY_BAKE_TEXTURES_MS"] = "2500"
         env["VICTORY_HEAP_RECHECK_EVERY"] = "30"
         env["VICTORY_COMPOSE"] = "1"
-        env["VICTORY_SHARPEN"] = "0.35"
+        env["VICTORY_SHARPEN"] = "0.22"
         env["VICTORY_PC_PROMPTS"] = "1"
+        env["VICTORY_FPS_COUNTER"] = "0"
         env["VICTORY_WINDOWS_BAR_MB"] = "1536"
         env["VICTORY_NO_WATCHDOG"] = "1"
         env["MIMALLOC_PURGE_DELAY"] = "100"
@@ -817,7 +821,7 @@ def launch_game(cfg, developer):
                     f"Engine: {engine}",
                     f"Engine build: {datetime.fromtimestamp(engine.stat().st_mtime).isoformat(timespec='seconds')}",
                     f"Console: {console} | FastGPU: {int(fast_gpu)} | BVH: {int(bvh_builder)}",
-                    f"GPU opts: Scale={env.get('VICTORY_RENDER_SCALE', '1')} | OwnUpscaler={env.get('VICTORY_OWN_UPSCALER', '0')} | Compose={env.get('VICTORY_COMPOSE', '0')} | Sharp={env.get('VICTORY_SHARPEN', '0')} | CopyPlain={env.get('VICTORY_COPY_PLAIN', '0')} | FaultUnlk={env.get('VICTORY_FAULT_UNLOCKED', '0')} | GuardHot={env.get('VICTORY_GUARD_HOT', '0')}ms | Spin={env.get('VICTORY_WIDE_SPIN', '0')}us | BVHMiss={env.get('VICTORY_BVH_MISS', '0')} | NanScrub={env.get('VICTORY_NAN_SCRUB', '0')} | Ambient={env.get('VICTORY_AMBIENT', 'off')}(air={env.get('VICTORY_AMBIENT_AIR', '')},most={env.get('VICTORY_AMBIENT_MOST', '')}) | SkipRT={len(env.get('VICTORY_SKIP_PIPELINES', '').splitlines())} | DynSlots={env.get('VICTORY_DYNAMIC_SLOTS', '')} | CardBuf={env.get('VICTORY_CARD_BUFFERS_MB')}MB(min={env.get('VICTORY_CARD_BUFFERS_MIN_MB', '1')}MB) | WinBAR={env.get('VICTORY_WINDOWS_BAR_MB', '0')}MB | Relay={env.get('VICTORY_RELAY', '0')}/CardSteps={env.get('VICTORY_CARD_STEPS', '0')}/NoWait={env.get('VICTORY_TEXTURE_NO_WAIT', '0')}",
+                    f"GPU opts: Scale={env.get('VICTORY_RENDER_SCALE', '1')} | OwnUpscaler={env.get('VICTORY_OWN_UPSCALER', '0')} | Compose={env.get('VICTORY_COMPOSE', '0')} | Sharp={env.get('VICTORY_SHARPEN', '0')} | CopyPlain={env.get('VICTORY_COPY_PLAIN', '0')} | TexFill={env.get('VICTORY_TEXTURE_FILL', '0')} | PageWrites={env.get('VICTORY_PAGE_WRITES', '0')} | LevelsOnDemand={env.get('VICTORY_LEVELS_ON_DEMAND', '0')} | Relook={env.get('VICTORY_RELOOK_MS', '20000')}ms | BVHMiss={env.get('VICTORY_BVH_MISS', '0')} | NanScrub={env.get('VICTORY_NAN_SCRUB', '0')} | Ambient={env.get('VICTORY_AMBIENT', 'off')}(air={env.get('VICTORY_AMBIENT_AIR', '')},most={env.get('VICTORY_AMBIENT_MOST', '')}) | SkipRT={len(env.get('VICTORY_SKIP_PIPELINES', '').splitlines())} | DynSlots={env.get('VICTORY_DYNAMIC_SLOTS', '')} | CardBuf={env.get('VICTORY_CARD_BUFFERS_MB')}MB | WinBAR={env.get('VICTORY_WINDOWS_BAR_MB', '0')}MB | Relay={env.get('VICTORY_RELAY', '0')}/CardSteps={env.get('VICTORY_CARD_STEPS', '0')}/NoWait={env.get('VICTORY_TEXTURE_NO_WAIT', '0')}",
                     f"Direct3D debug: {env.get('VICTORY_D3D12_DEBUG', '0')} | Surface: {env.get('VICE_SURFACE_STATS', '0')} | WARP: {env.get('VICTORY_D3D12_WARP', '0')}",
                 ]
                 for h in header:

@@ -1466,8 +1466,27 @@ static TARGETS_AT: std::sync::Mutex<std::collections::BTreeMap<u64, usize>> =
 /// all zeros from a first stage that held light (run 88).
 /// `VICTORY_ALIAS_COPY=0`: none is found, as before; `=1`: only textures
 /// of one level and one layer, as at first.
+/// A title texture held alive across an alias copy ([`alias_of`]).
 #[cfg(windows)]
-pub(crate) fn alias_of(this: This) -> Option<This> {
+pub(crate) struct Held(This);
+
+#[cfg(windows)]
+impl Held {
+    /// The texture kept alive by this handle.
+    pub(crate) fn get(&self) -> This {
+        self.0
+    }
+}
+
+#[cfg(windows)]
+impl Drop for Held {
+    fn drop(&mut self) {
+        resource_release(self.0);
+    }
+}
+
+#[cfg(windows)]
+pub(crate) fn alias_of(this: This) -> Option<Held> {
     use std::sync::atomic::Ordering::Relaxed;
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     if this.is_null()
@@ -1528,7 +1547,12 @@ pub(crate) fn alias_of(this: This) -> Option<This> {
             );
         }
     }
-    same.then_some(other)
+    // Pinned under the lock so the title cannot drop its last reference before
+    // the caller's alias copy finishes reading the source texture.
+    if !same || !crate::object::add_ref_alive(other) {
+        return None;
+    }
+    Some(Held(other))
 }
 
 /// Whether host copies are made on first use. On by default;
@@ -2133,6 +2157,14 @@ pub(crate) fn let_go_idle() {
     let began = std::time::Instant::now();
     for at in all.range(from..).take(part).copied().chain(by_age.iter().map(|&(_, at)| at)) {
         if bytes >= most {
+            break;
+        }
+        // Bound per-frame sweep work to <= 4 ms once at least one idle texture
+        // was reclaimed, eliminating 75-288 ms camera-turn freezes on 8 GB VRAM.
+        if went > 0 && (looked & 63) == 0 && began.elapsed().as_micros() >= 4_000 {
+            if part == PART {
+                FROM.store(at, Relaxed);
+            }
             break;
         }
         looked += 1;
@@ -4757,7 +4789,7 @@ float4 lit() : SV_Target { return 1.0; }
         let srv = [3, 0, 0, 0, 4, 0, 4, 0x1_0001, 67, 1, 0, 0, 0, 0];
         let uav = uav_texture_at(address, &srv, 42).unwrap();
         let view = texture_at(address, &srv).unwrap();
-        assert_eq!(alias_of(view), Some(uav));
+        assert_eq!(alias_of(view).map(|h| h.get()), Some(uav));
         assert_eq!(uav_texture_at(address, &srv, 42), Some(uav));
     }
 }

@@ -71,6 +71,16 @@ pub(crate) extern "system" fn add_ref(this: This) -> u32 {
     unsafe { &*this }.refs.fetch_add(1, Ordering::Relaxed) + 1
 }
 
+/// Increments the reference count only if the object is still alive (`refs > 0`).
+/// Returns `false` if the object is already being released so callers under a
+/// lookup lock never resurrect a dying resource.
+pub(crate) fn add_ref_alive(this: This) -> bool {
+    // SAFETY: `this` is a live entry in a table whose lock is held until drop removes it.
+    let refs = &unsafe { &*this }.refs;
+    refs.fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| (n > 0).then_some(n + 1))
+        .is_ok()
+}
+
 pub(crate) extern "system" fn release(this: This) -> u32 {
     // SAFETY: `this` is one of our objects.
     let refs = &unsafe { &*this }.refs;
