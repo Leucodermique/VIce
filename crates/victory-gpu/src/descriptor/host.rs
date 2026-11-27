@@ -726,15 +726,19 @@ impl Spans {
     }
 }
 
-/// Title memory written behind the guards' back whose bytes are there
-/// (DirectStorage's reads into physical pages, at the addresses the title
-/// has them mapped; `crate::watch::title_memory_written`), since a texture
-/// pass last took the ranges ([`page_written`]). Kept apart from
-/// [`REMAPPED`] so that what such writes do is counted by itself.
-static PAGE_WRITTEN: Mutex<Vec<(u64, u64)>> = Mutex::new(Vec::new());
+#[derive(Default)]
+struct HeapTextureChanges {
+    written: Vec<(u64, u64)>,
+    remapped: Vec<(u64, u64)>,
+}
 
-/// Since the start: such ranges kept for a pass; ranges dropped because no
-/// pass took them; slots of placed textures that held bytes of them when a
+/// A command list can bind a different view heap for its next draw. Each
+/// view heap subscribes on creation and drains its own change notes.
+static HEAP_CHANGES: Mutex<std::collections::BTreeMap<u64, HeapTextureChanges>> =
+    Mutex::new(std::collections::BTreeMap::new());
+
+/// Since the start: such ranges kept for a pass; ranges compacted when the
+/// queue filled; slots of placed textures that held bytes of them when a
 /// pass took them; of those, the slots whose texture had been uploaded
 /// before the write (out of the queue, or in it after an upload): they are
 /// the ones that kept the bytes from before, and the ones made due when
@@ -747,6 +751,40 @@ pub(crate) static PAGE_WRITES: [std::sync::atomic::AtomicU64; 4] =
 /// two frames on takes those of the next frame with it.
 const PAGE_WRITE_AFTER: u64 = 2;
 
+const MAX_PENDING_TEXTURE_CHANGES: usize = 1 << 15;
+
+/// Keep every changed byte covered. At capacity a pair can span an unchanged
+/// gap, whose textures will also be checked at the next pass instead of
+/// dropping streamed texture notifications.
+fn compact_texture_changes(ranges: &mut Vec<(u64, u64)>, limit: usize) {
+    join(ranges);
+    while ranges.len() > limit {
+        let pairs = ranges.len().div_ceil(2);
+        for pair in 0..pairs {
+            let first = 2 * pair;
+            let last = (first + 1).min(ranges.len() - 1);
+            ranges[pair] = (ranges[first].0, ranges[last].1);
+        }
+        ranges.truncate(pairs);
+    }
+}
+
+fn remember_texture_change(ranges: &mut Vec<(u64, u64)>, start: u64, end: u64) -> usize {
+    if let Some(last) = ranges.last_mut()
+        && last.1 == start
+    {
+        last.1 = end;
+        return 0;
+    }
+    let mut compacted = 0;
+    if ranges.len() >= MAX_PENDING_TEXTURE_CHANGES {
+        compacted = ranges.len();
+        compact_texture_changes(ranges, MAX_PENDING_TEXTURE_CHANGES / 2);
+    }
+    ranges.push((start, end));
+    compacted
+}
+
 /// The bytes of a write the guards do not see are in title memory `[at,
 /// at + len)`: the placed textures there changed with no descriptor
 /// written and nothing mapped. Kept for the next texture pass
@@ -754,30 +792,20 @@ const PAGE_WRITE_AFTER: u64 = 2;
 /// ranges; locks one mutex and calls nothing.
 pub(crate) fn page_written(at: usize, len: usize) {
     use std::sync::atomic::Ordering::Relaxed;
-    /// Ranges kept until a pass takes them.
-    const MOST: usize = 1 << 15;
     let (start, end) = (at as u64, at.saturating_add(len) as u64);
     if end <= SPANNED[0].load(Relaxed) || start >= SPANNED[1].load(Relaxed) {
         return;
     }
-    let mut ranges = PAGE_WRITTEN.lock().unwrap_or_else(|e| e.into_inner());
+    let mut heaps = HEAP_CHANGES.lock().unwrap_or_else(|e| e.into_inner());
     PAGE_WRITES[0].fetch_add(1, Relaxed);
-    if let Some(last) = ranges.last_mut()
-        && last.1 == start
-    {
-        last.1 = end;
-        return;
+    let compacted: usize = heaps
+        .values_mut()
+        .map(|heap| remember_texture_change(&mut heap.written, start, end))
+        .sum();
+    if compacted != 0 {
+        PAGE_WRITES[1].fetch_add(compacted as u64, Relaxed);
     }
-    if ranges.len() >= MOST {
-        PAGE_WRITES[1].fetch_add(ranges.len() as u64, Relaxed);
-        ranges.clear();
-    }
-    ranges.push((start, end));
 }
-
-/// Title memory the runtime mapped, unmapped or is about to write since a
-/// texture pass last took the ranges ([`remapped`]).
-static REMAPPED: Mutex<Vec<(u64, u64)>> = Mutex::new(Vec::new());
 
 /// The lowest start and the highest end of any span of [`Spans`] so far
 /// (the start is `u64::MAX` until there is one): what the runtime does to
@@ -789,7 +817,7 @@ static SPANNED: [std::sync::atomic::AtomicU64; 2] = [
 
 /// Since the start: slots whose view a newer view of other memory there
 /// made stale; ranges of memory noted as mapped, unmapped or written;
-/// ranges dropped because no pass took them; slots made due by such
+/// ranges compacted because no pass took them; slots made due by such
 /// ranges; and made slots whose memory was found unmapped (made null).
 pub(crate) static STALE: [std::sync::atomic::AtomicU64; 5] =
     [const { std::sync::atomic::AtomicU64::new(0) }; 5];
@@ -816,28 +844,19 @@ fn stale_rule() -> Rule {
 /// locks held: this locks one mutex of its own and calls nothing.
 pub(crate) fn remapped(at: usize, len: usize) {
     use std::sync::atomic::Ordering::Relaxed;
-    /// Ranges kept until a pass takes them.
-    const MOST: usize = 1 << 15;
     let (start, end) = (at as u64, at.saturating_add(len) as u64);
     if end <= SPANNED[0].load(Relaxed) || start >= SPANNED[1].load(Relaxed) {
         return;
     }
-    let mut ranges = REMAPPED.lock().unwrap_or_else(|e| e.into_inner());
+    let mut heaps = HEAP_CHANGES.lock().unwrap_or_else(|e| e.into_inner());
     STALE[1].fetch_add(1, Relaxed);
-    // Pages are mapped one after the other.
-    if let Some(last) = ranges.last_mut()
-        && last.1 == start
-    {
-        last.1 = end;
-        return;
+    let compacted: usize = heaps
+        .values_mut()
+        .map(|heap| remember_texture_change(&mut heap.remapped, start, end))
+        .sum();
+    if compacted != 0 {
+        STALE[2].fetch_add(compacted as u64, Relaxed);
     }
-    if ranges.len() >= MOST {
-        // No pass runs (no shader that picks textures by index is bound):
-        // the slots there are looked at when they are due, as before.
-        STALE[2].fetch_add(ranges.len() as u64, Relaxed);
-        ranges.clear();
-    }
-    ranges.push((start, end));
 }
 
 /// Ranges of memory, those that touch made one (DexNom/VIctory 921d8d3b:
@@ -977,6 +996,10 @@ impl TextureQueue {
         }
         // By the number of the write, counted over the run.
         let newest_first = |a: &(u64, u32, u64), b: &(u64, u32, u64)| b.2.cmp(&a.2);
+        if again.len() > max {
+            again.select_nth_unstable_by(max, newest_first);
+            again.truncate(max);
+        }
         again.sort_unstable_by(newest_first);
         fresh.sort_unstable_by(newest_first);
         let mut fresh_order: Vec<(u32, u64)> = Vec::with_capacity(fresh.len().min(max));
@@ -1579,6 +1602,14 @@ fn dynamic_slots(count: u32, null: u32) -> u32 {
     null.saturating_sub(count).min(most).max(DYNAMIC)
 }
 
+impl Drop for HostHeap {
+    fn drop(&mut self) {
+        if !self.sampler {
+            HEAP_CHANGES.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.id);
+        }
+    }
+}
+
 impl HostHeap {
     pub(crate) fn new(sampler: bool, count: u32) -> Option<Self> {
         let host = host()?;
@@ -1667,8 +1698,16 @@ impl HostHeap {
                 Some((buffer, gpu, data as usize))
             })
             .flatten();
+        let id = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if !sampler {
+            HEAP_CHANGES
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .entry(id)
+                .or_default();
+        }
         let h = HostHeap {
-            id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            id,
             heap,
             cpu,
             step,
@@ -1883,8 +1922,12 @@ impl HostHeap {
     /// whether memory was noted since a pass last took the notes.
     pub(crate) fn texture_news(&self) -> (u64, bool) {
         let writes = self.textures.lock().unwrap_or_else(|e| e.into_inner()).writes;
-        let noted = |ranges: &Mutex<Vec<(u64, u64)>>| !ranges.lock().unwrap_or_else(|e| e.into_inner()).is_empty();
-        (writes, noted(&REMAPPED) || noted(&PAGE_WRITTEN))
+        let noted = HEAP_CHANGES
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&self.id)
+            .is_some_and(|c| !c.remapped.is_empty() || !c.written.is_empty());
+        (writes, noted)
     }
 
     /// Every title slot of the queue that is due at `frame`, and whether
@@ -1971,7 +2014,11 @@ impl HostHeap {
     pub(crate) fn texture_slots_remapped(&self, frame: u64) -> usize {
         use std::sync::atomic::Ordering::Relaxed;
         self.texture_slots_page_written(frame);
-        let mut ranges = std::mem::take(&mut *REMAPPED.lock().unwrap_or_else(|e| e.into_inner()));
+        let mut ranges = HEAP_CHANGES
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_mut(&self.id)
+            .map_or_else(Vec::new, |c| std::mem::take(&mut c.remapped));
         if ranges.is_empty() {
             return 0;
         }
@@ -2028,7 +2075,11 @@ impl HostHeap {
     /// are left to their draws. Counted either way; returns how many slots
     /// it made due.
     fn texture_slots_page_written(&self, frame: u64) -> usize {
-        let ranges = std::mem::take(&mut *PAGE_WRITTEN.lock().unwrap_or_else(|e| e.into_inner()));
+        let ranges = HEAP_CHANGES
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_mut(&self.id)
+            .map_or_else(Vec::new, |c| std::mem::take(&mut c.written));
         if ranges.is_empty() {
             return 0;
         }
@@ -4004,14 +4055,43 @@ fn buffer_uav(
     Some(Some(shadow.buffer.clone()))
 }
 
+/// Whether the host lets views of a typed resource name another format of
+/// its family (`CastingFullyTypedFormatSupported`; never SNORM for UNORM,
+/// nor FLOAT for another type), which [`fits`] uses for sRGB and linear
+/// twins only.
+fn casts_typed() -> bool {
+    static CASTS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *CASTS.get_or_init(|| {
+        let Some(host) = host() else { return false };
+        let mut options = D3D12_FEATURE_DATA_D3D12_OPTIONS3::default();
+        // SAFETY: the query writes its own structure of the given size.
+        let asked = unsafe {
+            host.device.CheckFeatureSupport(
+                D3D12_FEATURE_D3D12_OPTIONS3,
+                (&raw mut options).cast(),
+                size_of_val(&options) as u32,
+            )
+        };
+        let casts = asked.is_ok() && options.CastingFullyTypedFormatSupported.as_bool();
+        if !casts {
+            tracing::warn!(
+                "the host does not cast typed formats: sRGB views of linear textures (and the reverse) read in the texture's own format"
+            );
+        }
+        casts
+    })
+}
+
 /// Whether the host can make a shader (or unordered access) view of
 /// `texture` in `format` (none: the texture's own). The console allows any
 /// view; the host refuses (and removes the device for) views without the
 /// resource's permission, of typed depth, and in another format than a
-/// typed resource's. A view of a typed texture in another format of its
-/// family takes the texture's format.
-/// shortcut: such a view (sRGB of UNORM, say) reads without its
-/// conversion; cast with castable formats if colors come out wrong.
+/// typed resource's, but for casts it allows (see [`casts_typed`]). A view
+/// of a typed texture in another format of its family takes the texture's
+/// format, unless it is the texture's sRGB or linear twin and the host
+/// casts: then the hardware converts (or not) as the console does.
+/// shortcut: other casts within a family (UINT of UNORM, say) read as the
+/// texture's own format.
 fn fits(texture: &ID3D12Resource, mut format: Option<&mut DXGI_FORMAT>, unordered: bool) -> bool {
     use crate::resource::{DEPTH_FORMATS, family};
     // SAFETY: a live resource.
@@ -4085,9 +4165,12 @@ fn typed_store(format: u32) -> bool {
     if view == 0 {
         return !typeless;
     }
+    if view == own {
+        return true;
+    }
     // A view of a target whose format the host refuses, in the title's
     // format: in the stand-in the host copy has.
-    if view != own && crate::resource::target_format(view) == own {
+    if crate::resource::target_format(view) == own {
         if let Some(format) = format {
             *format = d.Format;
         }
@@ -4099,6 +4182,7 @@ fn typed_store(format: u32) -> bool {
     }
     if let Some(format) = format
         && !typeless
+        && (unordered || !crate::resource::srgb_twins(view, own) || !casts_typed())
     {
         *format = d.Format;
     }
@@ -4677,7 +4761,7 @@ mod changed_records_tests {
 /// Whether both are shader views of one texture the title placed in
 /// memory: the same address and the same resource description, whatever
 /// part of it each shows.
-fn same_placed_texture(a: &View, b: &View) -> bool {
+pub(crate) fn same_placed_texture(a: &View, b: &View) -> bool {
     match (a, b) {
         (View::Placed(false, resource, desc), View::Placed(false, other, other_desc)) => {
             // (Words 1 and 13 are the filler of the description's layout, not

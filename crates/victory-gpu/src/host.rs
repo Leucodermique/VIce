@@ -146,6 +146,16 @@ pub(crate) fn available_physical_ram() -> Option<u64> {
 /// on: 61,000 of them in the first 300 s of session play-1125-0203, at 78 to
 /// 80 %, of which 13,000 were made and uploaded again.)
 pub(crate) fn vram_keep(budget: u64, used: u64) -> (u64, u64) {
+    vram_keep_below(budget, used, budget / 100 * 90)
+}
+
+/// [`vram_keep`] around the texture queue's line `line` (`crate::resource::room_line`)
+/// instead of 90 % of the budget: none go while `used` is 2 % of the budget
+/// under it or more, those idle 5 s go down to 5 % under it while it is
+/// under 5 % over it, those idle 1.5 s above that. On 8 GB laptop GPUs
+/// (`<= 9 GiB` DXGI budget) we start reclaiming 3 % below the line and aim
+/// 7 % below so textures recycle cleanly before WDDM spills to system RAM.
+pub(crate) fn vram_keep_below(budget: u64, used: u64, line: u64) -> (u64, u64) {
     const KEPT_MS: u64 = 600_000;
     const IDLE_MS: u64 = 5_000;
     const SHORT_MS: u64 = 1_500;
@@ -153,20 +163,19 @@ pub(crate) fn vram_keep(budget: u64, used: u64) -> (u64, u64) {
     if budget == 0 {
         return (IDLE_MS, u64::MAX);
     }
-    let share = |percent: u64| budget / 100 * percent;
-    // 8 GB laptop GPUs (DXGI budget ~7.0-7.4 GB): balanced reclamation threshold
-    // so textures stay loaded without pushing WDDM into 16 GB system RAM.
-    let (soft, hard, target) = if budget <= LOW_VRAM_BUDGET {
-        (85, 91, 80)
+    let step = budget / 100;
+    let (soft_margin, hard_over, aim_margin) = if budget <= LOW_VRAM_BUDGET {
+        (3, 3, 7)
     } else {
-        (88, 95, 85)
+        (2, 5, 5)
     };
-    if used < share(soft) {
+    let aim = line.saturating_sub(aim_margin * step);
+    if used < line.saturating_sub(soft_margin * step) {
         (KEPT_MS, u64::MAX)
-    } else if used < share(hard) {
-        (IDLE_MS, used - share(target))
+    } else if used < line + hard_over * step {
+        (IDLE_MS, used.saturating_sub(aim))
     } else {
-        (SHORT_MS, used - share(target))
+        (SHORT_MS, used.saturating_sub(aim))
     }
 }
 
@@ -8216,10 +8225,9 @@ pub(crate) fn copy_mapped(dst: *mut u8, src: *const u8, len: usize, title_dst: b
     if ask_first && !crate::texture::committed(dst, len) {
         return;
     }
-    if title_dst {
-        // The kernel writes the destination: it must not be guarded.
-        crate::watch::writing(dst as usize, len);
-    }
+    // Open the guards before writing, but notify texture heaps on drop (after
+    // the copy finishes) so a concurrent texture pass never uploads stale bytes.
+    let _writing = title_dst.then(|| crate::watch::copying_to_title(dst as usize, len));
     #[cfg(feature = "diagnostics")]
     let moved = std::time::Instant::now();
     let since = crate::watch::changes();
@@ -9297,12 +9305,16 @@ impl Host {
         };
         let mut buffer: Option<ID3D12Resource> = None;
         let mut data = std::ptr::null_mut();
-        // SAFETY: plain creation and mapping of a CPU-visible buffer.
+        // SAFETY: plain creation and mapping of a CPU-visible buffer in system RAM (L0).
+        // Committed buffers created with D3D12_HEAP_FLAG_NONE are resident on creation;
+        // skipping CREATE_NOT_RESIDENT + synchronous MakeResident/mapped eliminates ~33,000
+        // blocking copy-queue waits (~34 seconds total, up to 439 ms spikes) per session
+        // while keeping pool.rs 64 MiB bindless texture heaps protected by resident()+mapped().
         let made = unsafe {
             self.device
                 .CreateCommittedResource(
                     &heap,
-                    not_resident(),
+                    D3D12_HEAP_FLAG_NONE,
                     &desc,
                     D3D12_RESOURCE_STATE_COMMON,
                     None,
@@ -9310,8 +9322,6 @@ impl Host {
                 )
                 .and_then(|()| {
                     let b = buffer.as_ref().ok_or_else(windows::core::Error::empty)?;
-                    resident(&self.device, b)?;
-                    mapped(&self.device)?;
                     b.Map(0, None, Some(&mut data))
                 })
         };
@@ -9386,12 +9396,16 @@ impl Host {
         };
         let mut buffer: Option<ID3D12Resource> = None;
         let mut data = std::ptr::null_mut();
-        // SAFETY: plain creation and mapping of a CPU-visible buffer.
+        // SAFETY: plain creation and mapping of a CPU-visible buffer in system RAM (L0).
+        // Committed buffers created with D3D12_HEAP_FLAG_NONE are resident on creation;
+        // skipping CREATE_NOT_RESIDENT + synchronous MakeResident/mapped eliminates ~33,000
+        // blocking copy-queue waits (~34 seconds total, up to 439 ms spikes) per session
+        // while keeping pool.rs 64 MiB bindless texture heaps protected by resident()+mapped().
         let made = unsafe {
             self.device
                 .CreateCommittedResource(
                     &heap,
-                    not_resident(),
+                    D3D12_HEAP_FLAG_NONE,
                     &desc,
                     D3D12_RESOURCE_STATE_COMMON,
                     None,
@@ -9399,8 +9413,6 @@ impl Host {
                 )
                 .and_then(|()| {
                     let b = buffer.as_ref().ok_or_else(windows::core::Error::empty)?;
-                    resident(&self.device, b)?;
-                    mapped(&self.device)?;
                     b.Map(0, None, Some(&mut data))
                 })
         };
@@ -9437,11 +9449,11 @@ impl Host {
             ..Default::default()
         };
         let mut buffer: Option<ID3D12Resource> = None;
-        // SAFETY: plain creation of a device-local buffer.
+        // SAFETY: plain creation of a device-local buffer (resident on creation).
         let made = unsafe {
             self.device.CreateCommittedResource(
                 &heap,
-                not_resident(),
+                D3D12_HEAP_FLAG_NONE,
                 &desc,
                 D3D12_RESOURCE_STATE_COMMON,
                 None,
@@ -9452,7 +9464,6 @@ impl Host {
         if let Some(b) = &buffer {
             crate::book::made(b, || "an unordered access buffer".into());
         }
-        let made = made.and_then(|()| buffer.as_ref().map_or(Ok(()), |b| resident(&self.device, b))).and_then(|()| mapped(&self.device));
         match made {
             Ok(()) => buffer,
             Err(e) => {

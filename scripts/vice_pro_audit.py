@@ -773,34 +773,32 @@ class ProAuditor:
             probe = self._grab_frame(sct, (sct.monitors[1]["left"], sct.monitors[1]["top"], sct.monitors[1]["width"], sct.monitors[1]["height"]), dx_cam=dx_cam)
             if probe is not None and probe.bgr.max() == 0:
                 print("ATTENTION : l'ecran retourne 0 (shell non-interactif). Double-clique sur 'VIce Pro Audit.cmd' depuis Windows !", flush=True)
+            missing_since = None
             while not self.stop_requested:
                 t0 = time.monotonic()
                 procs = find_game_processes()
                 win = find_game_window(procs)
 
-                # Fallback 100% fiable : si play.log est actif (< 6s) ou si un processus victory tourne
-                # mais qu'EnumWindows ne voit pas la fenêtre (ex: plein écran / privilèges),
-                # on capture le moniteur principal (1920x1080).
-                log_active = False
-                try:
-                    if self.tailer.path.is_file() and (time.time() - self.tailer.path.stat().st_mtime) < 6.0:
-                        log_active = True
-                except OSError:
-                    pass
-
-                if win is None and (procs or log_active):
+                # Fallback fiable : uniquement si un vrai processus victory*.exe tourne
+                # (ne jamais déclencher saw_game uniquement sur un play.log récent d'une
+                # session précédente ou d'un démarrage incomplet).
+                if win is None and procs:
                     mon = sct.monitors[1]
                     first_pid = next(iter(procs.keys()), 0)
-                    first_exe = procs[first_pid][0] if first_pid else "play.log-active"
+                    first_exe = procs[first_pid][0] if first_pid else "victory"
                     win = (0, "VIce (fallback moniteur)", (mon["left"], mon["top"], mon["width"], mon["height"]), first_exe, first_pid)
 
                 if win is None:
                     if self.saw_game and self.args.until_exit:
-                        print("Jeu ferme -> generation du rapport final...", flush=True)
-                        break
+                        if missing_since is None:
+                            missing_since = time.monotonic()
+                        elif time.monotonic() - missing_since >= 8.0:
+                            print("Jeu ferme (confirme 8s) -> generation du rapport final...", flush=True)
+                            break
                     time.sleep(0.5)
                     continue
 
+                missing_since = None
                 if not self.saw_game:
                     self.saw_game = True
                     print(f"Jeu detecte : {win[3]} ({win[2][2]}x{win[2][3]}) — audit actif !", flush=True)

@@ -84,13 +84,13 @@ const FALLBACK_BUTTONS: [(u8, u32); 14] = [
 
 /// GTA-style PC keyboard buttons for AZERTY (Z/Q/S/D movement) and QWERTY
 /// (W/A/S/D movement), paired with native 360 mouse look and mouse clicks (LMB=RT, RMB=LT, MMB=R3).
-const PC_AZERTY_BUTTONS: [(u8, u32); 22] = [
+const PC_AZERTY_BUTTONS: [(u8, u32); 24] = [
     (0x1B, MENU),           // Esc -> Pause
     (b'P', MENU),           // P -> Pause
     (b'V', VIEW),           // V -> Camera view
     (0xA0, A),              // Left Shift -> Sprint / Confirm
     (0x0D, A),              // Enter -> Confirm
-    (0x20, X),              // Space -> Jump / Climb
+    (0x20, X),              // Space -> Jump / Climb / Threaten
     (b'R', B),              // R -> Reload / Melee / Back
     (0x08, B),              // Backspace -> Back
     (b'F', Y),              // F -> Enter / Exit vehicle
@@ -98,18 +98,20 @@ const PC_AZERTY_BUTTONS: [(u8, u32); 22] = [
     (b'A', LEFT_SHOULDER),  // A (left of Z on AZERTY) -> Weapon wheel / LB
     (b'G', RIGHT_SHOULDER), // G -> Cover / RB
     (b'X', RIGHT_SHOULDER), // X -> Cover / RB
-    (0xA2, LEFT_STICK),     // Left Ctrl -> Crouch / Stealth (L3)
+    (0xA2, LEFT_STICK),     // Left Ctrl -> Crouch / Stealth / Horn (L3)
     (b'C', RIGHT_STICK),    // C -> Look behind / Zoom (R3)
     (b'E', A),              // E -> Interact / Talk (A)
     (b'T', UP),             // T -> Phone (D-Pad Up)
     (0xA4, DOWN),           // Left Alt -> Character wheel / Minimap (D-Pad Down)
+    (b'B', LEFT),           // B -> D-Pad Left (context / radio / weapon slot)
+    (b'H', RIGHT),          // H -> D-Pad Right (headlights / heist context action)
     (0x26, UP),             // Up arrow -> Phone / D-Pad Up
     (0x28, DOWN),           // Down arrow -> D-Pad Down
     (0x25, LEFT),           // Left arrow -> D-Pad Left
     (0x27, RIGHT),          // Right arrow -> D-Pad Right
 ];
 
-const PC_QWERTY_BUTTONS: [(u8, u32); 22] = [
+const PC_QWERTY_BUTTONS: [(u8, u32); 24] = [
     (0x1B, MENU),
     (b'P', MENU),
     (b'V', VIEW),
@@ -128,6 +130,8 @@ const PC_QWERTY_BUTTONS: [(u8, u32); 22] = [
     (b'E', A),
     (b'T', UP),
     (0xA4, DOWN),
+    (b'B', LEFT),
+    (b'H', RIGHT),
     (0x26, UP),
     (0x28, DOWN),
     (0x25, LEFT),

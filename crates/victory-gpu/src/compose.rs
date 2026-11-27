@@ -17,12 +17,14 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 const SLOTS: u32 = 16;
 const SLOTS_PER_FRAME: u32 = 5;
 
-/// Embedded 1280x128 R8G8_UNORM alpha+ink atlas (10 crisp 128x128 8x-supersampled GTA VI-style PC prompt icons):
+/// Embedded 2304x128 R8G8_UNORM alpha+ink atlas (18 crisp 128x128 8x-supersampled GTA VI-style PC prompt icons):
 /// R = alpha coverage (0 outside silhouette -> guaranteed zero black box),
 /// G = ink luminance (0 = dark outline/letter, 1 = pure white keycap/active mouse button).
 /// 0: RMB (LT), 1: LMB (RT), 2: TAB (LB), 3: G (RB), 4: MAJ (A),
-/// 5: R (B), 6: SPACE (X), 7: F (Y), 8: E (Interact/Talk A), 9: C (RS).
-const ATLAS_W: u32 = 1280;
+/// 5: R (B), 6: SPACE (X), 7: F (Y), 8: E (Interact/Talk A), 9: C (RS),
+/// 10: CTRL (L3), 11: V (View), 12: T (D-Pad Up), 13: ALT (D-Pad Down),
+/// 14: B (D-Pad Left), 15: H (D-Pad Right), 16: ZQSD (LS), 17: ECHAP (Menu).
+const ATLAS_W: u32 = 2304;
 const ATLAS_H: u32 = 128;
 const ATLAS_BPP: u32 = 2;
 const ATLAS_BYTES: &[u8] = include_bytes!("pc_prompts_atlas.bin");
@@ -56,7 +58,7 @@ RWTexture2D<float4> outp : register(u0);
 // Prompt detection state (raw u32 buffer):
 // dword 0: raw candidate count (0..64)
 // dwords 1..1 + 64*4: raw candidates (cx, cy, packed_kind_flags, score_u32)
-//   packed_kind_flags: bits 0..7 = icon_id (0..9), bits 8..15 = style (0=box popup, 1=floating circle, 2=ring inner)
+//   packed_kind_flags: bits 0..7 = icon_id (0..17), bits 8..15 = style (0=box popup, 1=floating circle, 2=ring inner)
 // dword 260: merged hit count (0..8)
 // dwords 261..261 + 8*6: merged hits (cx, cy, hw, hh, icon_id, style)
 RWByteAddressBuffer prompts : register(u1);
@@ -113,7 +115,8 @@ int classify_abxy_color(float4 c) {
 // Cross-Correlation (ZNCC), verified against real 1080p GTA VI screenshots:
 // A -> E (tile 8), X -> SPACE (tile 6), R (right stick) -> Mouse (tile 0),
 // B -> R (tile 5), Y -> F (tile 7).
-int classify_white_circle_letter(float2 p, float scale) {
+int classify_white_circle_letter(float2 p, float scale, out float confidence) {
+    confidence = 0.0;
     // 1) Find dark-ink bounding box strictly inside disk radius <= 6.2*scale
     //    so outer ring outline or adjacent words never contaminate the letter bbox.
     float minx = 100.0, maxx = -100.0, miny = 100.0, maxy = -100.0;
@@ -156,23 +159,25 @@ int classify_white_circle_letter(float2 p, float scale) {
     for (int k = 0; k < 25; k++) vec[k] -= mean;
 
     // 3) 5x5 bitmask templates (bit (j*5+i) = 1 where dark ink is expected).
-    // A(8): 00100 / 01010 / 01010 / 11111 / 10001
-    // X(6): 10001 / 01010 / 00100 / 01010 / 10001
-    // R(0): 11110 / 10010 / 11100 / 10100 / 10010
-    // B(5): 11110 / 10010 / 11110 / 10010 / 11110
-    // Y(7): 10001 / 01010 / 00100 / 00100 / 00100
-    static const uint MASKS[5] = {
+    // A(8):  00100 / 01010 / 01010 / 11111 / 10001
+    // X(6):  10001 / 01010 / 00100 / 01010 / 10001
+    // R(0):  11110 / 10010 / 11100 / 10100 / 10010
+    // B(5):  11110 / 10010 / 11110 / 10010 / 11110
+    // Y(7):  10001 / 01010 / 00100 / 00100 / 00100
+    // L(16): 10000 / 10000 / 10000 / 10000 / 11111
+    static const uint MASKS[6] = {
         0x11FA944u, // A -> 8 (E)
         0x1151151u, // X -> 6 (SPACE)
         0x0929D2Fu, // R -> 0 (MOUSE)
         0x0F4BD2Fu, // B -> 5 (R)
-        0x0421151u  // Y -> 7 (F)
+        0x0421151u, // Y -> 7 (F)
+        0x1F08421u  // L -> 16 (ZQSD)
     };
-    static const int IDS[5] = { 8, 6, 0, 5, 7 };
+    static const int IDS[6] = { 8, 6, 0, 5, 7, 16 };
 
     int best_id = 8;
     float best_sc = -1e9;
-    for (int t = 0; t < 5; t++) {
+    for (int t = 0; t < 6; t++) {
         uint mask = MASKS[t];
         float ones = 0.0;
         for (int k = 0; k < 25; k++) {
@@ -192,7 +197,28 @@ int classify_white_circle_letter(float2 p, float scale) {
             best_id = IDS[t];
         }
     }
+    float vec_norm2 = 0.0;
+    for (int k = 0; k < 25; k++) vec_norm2 += vec[k] * vec[k];
+    confidence = best_sc / sqrt(max(vec_norm2, 1e-4));
     return best_id;
+}
+
+// World-space objective buttons are admitted only beside the compact pink
+// objective dot (e.g. (Y) ARGENT). Never scan arbitrary scene discs as buttons.
+bool is_objective_pink(float4 c) {
+    return c.a > 0.72 && c.r > 0.62 && c.b > 0.40 &&
+        c.r - c.g > 0.20 && c.b - c.g > 0.12;
+}
+
+bool has_objective_dot(float2 p, float scale) {
+    float2 dot_pos = p + float2(40.0 * scale, 0.0);
+    if (!is_objective_pink(sample_ui_px(dot_pos))) return false;
+    float r = 4.0 * scale;
+    uint pink = is_objective_pink(sample_ui_px(dot_pos + float2(r, 0.0))) ? 1u : 0u;
+    pink += is_objective_pink(sample_ui_px(dot_pos - float2(r, 0.0))) ? 1u : 0u;
+    pink += is_objective_pink(sample_ui_px(dot_pos + float2(0.0, r))) ? 1u : 0u;
+    pink += is_objective_pink(sample_ui_px(dot_pos - float2(0.0, r))) ? 1u : 0u;
+    return pink >= 3u;
 }
 
 void push_candidate(float2 p, uint icon, uint style, float score) {
@@ -252,7 +278,10 @@ void detect_hits(uint3 tid : SV_DispatchThreadID) {
     // and bottom-center ("Maintenez [LT] pour viser.", "Appuyez sur (X) pour menacer.", "Utilisez (R)...").
     bool in_bottom_right = (p.x > float(w) * 0.72 && p.y > float(h) * 0.55);
     bool in_bottom_center = (p.x > float(w) * 0.25 && p.x < float(w) * 0.78 && p.y > float(h) * 0.85);
-    if (in_bottom_right || in_bottom_center) {
+    bool in_objective_center = p.x > float(w) * 0.20 && p.x < float(w) * 0.82 &&
+        p.y > float(h) * 0.20 && p.y < float(h) * 0.85;
+    if (in_objective_center) in_objective_center = has_objective_dot(p, scale);
+    if (in_bottom_right || in_bottom_center || in_objective_center) {
         // A1) Hold-ring prompt (bottom-right): crisp white ring at radius ~18px, transparent outside at ~25px.
         if (in_bottom_right) {
             bool outer_clear =
@@ -261,16 +290,23 @@ void detect_hits(uint3 tid : SV_DispatchThreadID) {
                 sample_ui_px(p + float2(25.0 * scale, 0.0)).a < 0.18;
             if (outer_clear) {
                 uint ring18 = 0u;
+                uint ring_band = 0u;
                 uint ring25_clear = 0u;
                 for (uint k = 0u; k < 16u; k++) {
                     float ang = float(k) * (TWO_PI / 16.0);
                     float2 dir = float2(cos(ang), sin(ang));
-                    if (is_white_glyph(sample_ui_px(p + dir * (18.0 * scale)))) ring18++;
+                    bool r18 = is_white_glyph(sample_ui_px(p + dir * (18.0 * scale)));
+                    if (r18) ring18++;
+                    // Larger hold rings in the audit have radius ~20px; cover
+                    // the 2px detection-grid phase without relaxing the clear exterior.
+                    if (r18 || is_white_glyph(sample_ui_px(p + dir * (20.0 * scale))) ||
+                        is_white_glyph(sample_ui_px(p + dir * (22.0 * scale)))) ring_band++;
                     if (sample_ui_px(p + dir * (25.0 * scale)).a < 0.18) ring25_clear++;
                 }
-                if (ring18 >= 13u && ring25_clear >= 10u) {
+                if (ring_band >= 13u && ring25_clear >= 10u) {
                     float inner_w = 0.0;
                     uint inner_d = 0u;
+                    float inner_min = 1.0, inner_max = 0.0;
                     float tl = 0.0, tr = 0.0, bl = 0.0, br = 0.0;
                     for (int j = 0; j < 6; j++) {
                         for (int i = 0; i < 6; i++) {
@@ -278,7 +314,14 @@ void detect_hits(uint3 tid : SV_DispatchThreadID) {
                             float4 s = sample_ui_px(p + off);
                             float v = is_white_glyph(s) ? 1.0 : 0.0;
                             inner_w += v;
-                            if (i >= 1 && i <= 4 && j >= 1 && j <= 4 && is_dark_ink(s)) inner_d++;
+                            if (i >= 1 && i <= 4 && j >= 1 && j <= 4) {
+                                if (is_dark_ink(s)) inner_d++;
+                                if (s.a > 0.72) {
+                                    float l = dot(s.rgb, LUMA);
+                                    inner_min = min(inner_min, l);
+                                    inner_max = max(inner_max, l);
+                                }
+                            }
                             if (j < 2 && i < 2) tl += v;
                             if (j < 2 && i >= 4) tr += v;
                             if (j >= 4 && i < 2) bl += v;
@@ -286,12 +329,27 @@ void detect_hits(uint3 tid : SV_DispatchThreadID) {
                         }
                     }
                     float fill = inner_w / 36.0;
-                    if (fill >= 0.42 && inner_d >= 2u) {
+                    // Some LT/RT labels are light grey, rather than dark ink.
+                    // Require both bevel asymmetry and local letter contrast;
+                    // an unlettered white disc must never select a trigger.
+                    if (fill >= 0.60 && inner_max > 0.80 && inner_min > 0.32 &&
+                        inner_max - inner_min > 0.16 && tl + tr >= 5.0) {
+                        if (bl >= 3.0 && br <= 2.0 && bl - br >= 2.0) {
+                            push_candidate(p, 0u, 2u, fill); // LT -> RMB
+                            return;
+                        }
+                        if (br >= 3.0 && bl <= 2.0 && br - bl >= 2.0) {
+                            push_candidate(p, 1u, 2u, fill); // RT -> LMB
+                            return;
+                        }
+                    }
+                    if (ring18 >= 13u && fill >= 0.42 && inner_d >= 2u) {
                         uint icon;
                         if (abs(bl - br) >= 0.9 && (tl + tr) >= 2.5) {
                             icon = (br > bl) ? 1u : 0u; // LT -> RMB (0), RT -> LMB (1)
                         } else {
-                            icon = uint(classify_white_circle_letter(p, scale));
+                            float confidence;
+                            icon = uint(classify_white_circle_letter(p, scale, confidence));
                         }
                         push_candidate(p, icon, 2u, fill);
                         return;
@@ -375,7 +433,12 @@ void detect_hits(uint3 tid : SV_DispatchThreadID) {
                         }
                     }
                     if (dark_cnt >= 2u && dark_cnt <= 7u) {
-                        int icon = classify_white_circle_letter(p, scale);
+                        float confidence;
+                        int icon = classify_white_circle_letter(p, scale, confidence);
+                        // Only the observed Y objective template is enabled in
+                        // the new central region; unknown glyphs remain untouched.
+                        if (in_objective_center && !in_bottom_right && !in_bottom_center &&
+                            (icon != 7 || confidence < 0.60)) return;
                         uint style = (ring_luma / float(ring10) < 0.65) ? 3u : 1u; // 3 = dimmed inactive button
                         push_candidate(p, uint(icon), style, float(ring10) / 12.0);
                         return;
@@ -696,7 +759,7 @@ void main(uint3 id : SV_DispatchThreadID) {
             if (style == 2u && dot(rel, rel) > 1.0) continue;
 
             float2 tile_uv = rel * 0.5 + 0.5;
-            float u_atlas = (float(icon) + clamp(tile_uv.x, 0.004, 0.996)) / 10.0;
+            float u_atlas = (float(icon) + clamp(tile_uv.x, 0.004, 0.996)) / 18.0;
             float v_atlas = clamp(tile_uv.y, 0.004, 0.996);
             float2 ag = atlas.SampleLevel(linear_clamp, float2(u_atlas, v_atlas), 0);
             float prompt_a = saturate(max(u.a, sample_ui_px(cpos).a) / 0.85);
@@ -717,7 +780,7 @@ void main(uint3 id : SV_DispatchThreadID) {
                 if (bg.a < 0.25) bg = float4(0.0, 0.0, 0.0, 0.0);
             } else {
                 // Soft outer drop-shadow halo behind floating PC keycaps so they stay readable over bright sky.
-                float2 off_uv = float2(0.0018, 0.018);
+                float2 off_uv = float2(0.001, 0.018);
                 float sh = 0.0;
                 sh = max(sh, atlas.SampleLevel(linear_clamp, float2(u_atlas + off_uv.x, v_atlas + off_uv.y), 0).x);
                 sh = max(sh, atlas.SampleLevel(linear_clamp, float2(u_atlas - off_uv.x, v_atlas + off_uv.y), 0).x);

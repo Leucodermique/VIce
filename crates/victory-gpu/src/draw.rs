@@ -17,12 +17,55 @@ use crate::descriptor::View;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY;
 use windows::Win32::Graphics::Direct3D12::*;
-use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT;
+use windows::Win32::Graphics::Dxgi::Common::{
+    DXGI_FORMAT, DXGI_FORMAT_R24_UNORM_X8_TYPELESS, DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS,
+    DXGI_FORMAT_X24_TYPELESS_G8_UINT, DXGI_FORMAT_X32_TYPELESS_G8X24_UINT,
+};
 use windows::core::Interface;
 
 use crate::host::HostList;
 use crate::object::This;
 use crate::pipeline::host::HostPipeline;
+
+/// Whether a shader view reads a depth plane (not a stencil plane) of a 2D texture.
+fn is_depth_srv(desc: &[u32; 10]) -> bool {
+    let format = DXGI_FORMAT(crate::resource::pc_format(desc[0]) as i32);
+    desc[1] == D3D12_SRV_DIMENSION_TEXTURE2D.0 as u32
+        && desc[6] == 0
+        && !matches!(format, DXGI_FORMAT_X32_TYPELESS_G8X24_UINT | DXGI_FORMAT_X24_TYPELESS_G8_UINT)
+}
+
+/// Accept a depth view of the same subresources as a bound stencil view
+/// (ported from Vice-Tay 292adb5a so ambient::Resolve never silently skips
+/// frames when the resolve binds the stencil plane at slot (0,464)).
+fn is_depth_companion(stencil: &View, depth: &View) -> bool {
+    let (stencil_desc, depth_desc): (&[u32], &[u32]) = match (stencil, depth) {
+        (View::Shader(a, Some(stencil)), View::Shader(b, Some(depth))) if a == b && *a != 0 => {
+            (stencil, depth)
+        }
+        (View::Placed(false, _, stencil_desc), View::Placed(false, _, depth_desc))
+            if crate::descriptor::host::same_placed_texture(stencil, depth) =>
+        {
+            (stencil_desc, depth_desc)
+        }
+        _ => return false,
+    };
+    let format = |view: &[u32]| DXGI_FORMAT(crate::resource::pc_format(view[0]) as i32);
+    let expected = match format(stencil_desc) {
+        DXGI_FORMAT_X32_TYPELESS_G8X24_UINT => DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS,
+        DXGI_FORMAT_X24_TYPELESS_G8_UINT => DXGI_FORMAT_R24_UNORM_X8_TYPELESS,
+        _ => return false,
+    };
+    let texture_2d = D3D12_SRV_DIMENSION_TEXTURE2D.0 as u32;
+    stencil_desc[1] == texture_2d
+        && depth_desc[1] == texture_2d
+        && stencil_desc[6] == 1
+        && depth_desc[6] == 0
+        && format(depth_desc) == expected
+        && depth_desc[2] == D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING
+        && stencil_desc[4..6] == depth_desc[4..6]
+        && stencil_desc[7] == depth_desc[7]
+}
 
 /// A root argument as the title set it.
 #[derive(Debug, Clone, Default)]
@@ -622,6 +665,10 @@ pub(crate) static HEAP_TEXTURES_WAITING: AtomicU64 = AtomicU64::new(0);
 /// Passes that made no texture because the card had no room
 /// (`crate::resource::room`), for the memory line.
 pub(crate) static HEAP_TEXTURES_FULL: AtomicU64 = AtomicU64::new(0);
+/// Looks of the pass over textures picked by index at a slot whose host copy
+/// found no place in an existing block while the card had no room for a new
+/// block (`crate::pool::gate`): the slot stayed due.
+pub(crate) static HEAP_TEXTURES_NO_PLACE: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
 
 /// Frames after a whole upload of a texture picked by index at which its
 /// memory is looked at again, each counted from the look before.
@@ -2449,6 +2496,23 @@ impl State {
                     }
                 }
             }
+            // The card has no room for a new block of textures (`crate::pool::gate`):
+            // try to place the host copy inside an existing block first; if none fits,
+            // keep the slot showing its earlier view and retry later without spilling VRAM.
+            if room && crate::pool::full() && !baking {
+                let held = heap.handle(index).and_then(crate::descriptor::view);
+                let wanted = held.as_ref().and_then(crate::descriptor::host::placed_texture).or(held);
+                if let Some(View::Shader(wanted, _)) = wanted
+                    && crate::resource::title_fills(wanted as This)
+                    && let (None, true) = crate::pool::waiting(|| crate::resource::host_resource(wanted as This))
+                {
+                    for count in &HEAP_TEXTURES_NO_PLACE {
+                        count.fetch_add(1, Ordering::Relaxed);
+                    }
+                    host.texture_slot_later(index, write, frame, most);
+                    continue;
+                }
+            }
             // A slot that shows the texture by an earlier view of it (one
             // from another level) goes on doing so until the upload of what
             // the new one shows has run.
@@ -2747,83 +2811,162 @@ impl State {
         unsafe { list.list.Dispatch(x, y, z) };
         self.buffers_written();
         DISPATCHED.fetch_add(1, Ordering::Relaxed);
+        use crate::ambient::{Dispatched, Role, note_reflect};
+        let reflect = p.stages.first().and_then(|s| s.shader.ambient) == Some(Role::Reflect);
+        if reflect && (x == 0 || y == 0 || z == 0) {
+            if crate::ambient::holds() {
+                note_reflect(Dispatched::Empty);
+            }
+        } else if self.after_dispatch(list, p, None) == Some(Role::Reflect) {
+            note_reflect(Dispatched::Direct);
+        }
+    }
+
+    /// What follows a dispatch of `p`, direct or indirect: the stand-in for
+    /// the indirect light and traced reflection hold.
+    fn after_dispatch(
+        &mut self,
+        list: &HostList,
+        p: &HostPipeline,
+        indirect: Option<crate::ambient::IndirectHold<'_>>,
+    ) -> Option<crate::ambient::Role> {
         if let Some(role) = p.stages.first().and_then(|s| s.shader.ambient)
             && crate::ambient::on()
-            && self.ambient(list, p, role)
+            && self.ambient(list, p, role, indirect)
         {
             self.host_pipeline = 0;
             self.host_roots[1] = 0;
+            return Some(role);
         }
+        None
     }
 
     /// The stand-in for the indirect light after a dispatch of `p`
     /// (`crate::ambient`). Whether it recorded anything.
-    fn ambient(&self, list: &HostList, p: &HostPipeline, role: crate::ambient::Role) -> bool {
-        use crate::ambient::{AIR, DEPTH, LIGHT, RADIANCE, Role, Views};
+    fn ambient(
+        &self,
+        list: &HostList,
+        p: &HostPipeline,
+        role: crate::ambient::Role,
+        indirect: Option<crate::ambient::IndirectHold<'_>>,
+    ) -> bool {
+        use crate::ambient::{AIR, DEPTH, LIGHT, RADIANCE, REFLECTIONS, Role, Views};
         let Some(t) = p.stages.first().map(|s| s.translated()) else {
             return false;
         };
-        let Some(heap) = (self.heaps[0] != 0).then(|| crate::descriptor::heap(self.heaps[0] as This).host()).flatten()
-        else {
-            return false;
+        let entry = |kind: ResourceType, at: (u8, u32)| self.table_view(t, true, kind, at);
+        let image = match role {
+            Role::Resolve => entry(ResourceType::Uav, LIGHT),
+            Role::Radiance => entry(ResourceType::Uav, RADIANCE),
+            Role::Air => entry(ResourceType::Uav, AIR),
+            // The first of the places that holds a 2D R9G9B9E5 (as R32_UINT) image.
+            Role::Reflect => REFLECTIONS.iter().find_map(|&at| {
+                entry(ResourceType::Uav, at).filter(|(d, _)| {
+                    d.Format.0 == 42 && d.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D
+                })
+            }),
         };
-        let entry = |kind: ResourceType, (slot, offset): (u8, u32)| {
-            t.used.iter().find(|u| {
-                u.kind == kind && u.root == RootType::Table && (u.slot, u.table_offset_dwords) == (slot, offset)
-            })?;
-            let Some(Root::Table(table)) = self.roots_ref(true).get(usize::from(slot)) else {
-                return None;
-            };
-            let resource = match (kind, crate::descriptor::view(table + u64::from(offset) * 4)?) {
-                (ResourceType::Srv, View::Shader(r, _))
-                | (ResourceType::Uav, View::Unordered(r, ..)) => r,
-                _ => return None,
-            };
-            let start = match self.ambient_tables.iter().find(|m| m.0 == slot) {
-                Some(m) => m.1,
-                None => self.user_value(true, slot, RootType::Table, 0),
-            };
-            let host = crate::resource::host_resource(resource as This)?;
-            // SAFETY: a live resource.
-            let desc = unsafe { host.GetDesc() };
-            Some((desc, heap.gpu_handle((start + offset * 4) / 32)))
-        };
-        let at = match role {
-            Role::Resolve => LIGHT,
-            Role::Radiance => RADIANCE,
-            Role::Air => AIR,
-        };
-        let Some((of, image)) = entry(ResourceType::Uav, at) else {
+        let Some((of, image)) = image else {
             once!(?role, "no stand-in for the indirect light: missing image UAV");
             return false;
         };
-        let depth = match role {
-            Role::Resolve => {
-                let Some((seen, depth)) = entry(ResourceType::Srv, DEPTH) else {
-                    once!(?role, "no stand-in for the indirect light: missing depth SRV");
-                    return false;
-                };
-                if (seen.Width, seen.Height) != (of.Width, of.Height) {
-                    once!(?role, "no stand-in for the indirect light: depth dimensions differ");
-                    return false;
-                }
-                Some(depth)
+        let depth = if role == Role::Resolve {
+            let Some((seen, depth)) = entry(ResourceType::Srv, DEPTH) else {
+                once!(?role, "no stand-in for the indirect light: missing depth SRV");
+                return false;
+            };
+            if seen.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D
+                || seen.SampleDesc.Count != 1
+                || (seen.Width, seen.Height) != (of.Width, of.Height)
+            {
+                once!(?role, "no stand-in for the indirect light: depth dimensions differ");
+                return false;
             }
-            Role::Radiance | Role::Air => None,
+            Some(depth)
+        } else {
+            None
         };
         // (R32_UINT holding R9G9B9E5; R11G11B10_FLOAT.)
-        let format = if role == Role::Resolve { 42 } else { 26 };
+        let format = match role {
+            Role::Resolve | Role::Reflect => 42,
+            Role::Radiance | Role::Air => 26,
+        };
         let volume = of.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D;
         if of.Format.0 != format || volume != (role == Role::Air) {
             once!(?role, format = of.Format.0, "no stand-in for the indirect light: another image");
             return false;
         }
-        crate::ambient::after(list, role, &Views {
-            image,
-            depth,
-            size: [of.Width as u32, of.Height],
-            slices: u32::from(of.DepthOrArraySize),
-        })
+        crate::ambient::after(
+            list,
+            role,
+            &Views {
+                image,
+                depth,
+                size: [of.Width as u32, of.Height],
+                slices: u32::from(of.DepthOrArraySize),
+            },
+            indirect,
+        )
+    }
+
+    /// The view a shader of the bound pipeline reads through a table, at
+    /// (root parameter, dwords into the table): resolves placed textures
+    /// (`bda6e597`) and falls back to a compatible depth SRV when the diffuse
+    /// resolve binds the stencil plane (`292adb5a`).
+    fn table_view(
+        &self,
+        t: &crate::pipeline::Translated,
+        compute: bool,
+        kind: ResourceType,
+        (slot, offset): (u8, u32),
+    ) -> Option<(D3D12_RESOURCE_DESC, D3D12_GPU_DESCRIPTOR_HANDLE)> {
+        let heap = (self.heaps[0] != 0).then(|| crate::descriptor::heap(self.heaps[0] as This).host()).flatten()?;
+        t.used.iter().find(|u| {
+            u.kind == kind && u.root == RootType::Table && (u.slot, u.table_offset_dwords) == (slot, offset)
+        })?;
+        let view = self.bound_table_view(compute, (slot, offset))?;
+        let placed = crate::descriptor::host::placed_texture(&view);
+        let ((slot, offset), resource) = match (kind, placed.as_ref().unwrap_or(&view)) {
+            (ResourceType::Srv, View::Shader(r, desc)) if desc.as_ref().is_none_or(is_depth_srv) => {
+                ((slot, offset), *r)
+            }
+            (ResourceType::Uav, View::Unordered(r, ..)) => ((slot, offset), *r),
+            (ResourceType::Srv, _) if compute && (slot, offset) == crate::ambient::DEPTH => {
+                // The diffuse resolve can bind the stencil plane at the usual
+                // slot. Use a depth view already read by the same dispatch.
+                let (at, depth) = t
+                    .used
+                    .iter()
+                    .filter(|u| u.kind == ResourceType::Srv && u.root == RootType::Table)
+                    .map(|u| (u.slot, u.table_offset_dwords))
+                    .filter(|at| *at != (slot, offset))
+                    .find_map(|at| {
+                        let depth = self.bound_table_view(compute, at)?;
+                        is_depth_companion(&view, &depth).then_some((at, depth))
+                    })?;
+                let placed = crate::descriptor::host::placed_texture(&depth);
+                let View::Shader(resource, _) = placed.as_ref().unwrap_or(&depth) else {
+                    return None;
+                };
+                (at, *resource)
+            }
+            _ => return None,
+        };
+        let start = match self.ambient_tables.iter().find(|m| m.0 == slot) {
+            Some(m) => m.1,
+            None => self.user_value(compute, slot, RootType::Table, 0),
+        };
+        let host = crate::resource::host_resource(resource as This)?;
+        // SAFETY: a live resource.
+        let desc = unsafe { host.GetDesc() };
+        Some((desc, heap.gpu_handle(start.checked_add(offset.checked_mul(4)?)? / 32)))
+    }
+
+    fn bound_table_view(&self, compute: bool, (slot, offset): (u8, u32)) -> Option<View> {
+        let Some(Root::Table(table)) = self.roots_ref(compute).get(usize::from(slot)) else {
+            return None;
+        };
+        crate::descriptor::view(table.checked_add(u64::from(offset) * 4)?)
     }
 
     /// What a draw or dispatch runs, for the device-removed report
@@ -4071,6 +4214,24 @@ impl State {
         // back (`crate::indirect`).
         if kind == DISPATCH {
             DISPATCHED.fetch_add(1, Ordering::Relaxed);
+            // Guard reflection holds against empty indirect dispatches (Vice-Tay #127).
+            use crate::ambient::{Dispatched, IndirectHold, Role, note_reflect};
+            if p.stages.first().and_then(|s| s.shader.ambient) == Some(Role::Reflect) {
+                if counter.is_some() {
+                    if crate::ambient::on() && crate::ambient::holds() {
+                        note_reflect(Dispatched::Counted);
+                    }
+                } else if max == 1 {
+                    if let Ok(at) = u32::try_from(at)
+                        && self.after_dispatch(list, p, Some(IndirectHold { buffer: &bounded, at }))
+                            == Some(Role::Reflect)
+                    {
+                        note_reflect(Dispatched::Indirect);
+                    }
+                } else if max > 1 && crate::ambient::on() && crate::ambient::holds() {
+                    note_reflect(Dispatched::Multiple);
+                }
+            }
         } else {
             DRAWN.fetch_add(1, Ordering::Relaxed);
         }

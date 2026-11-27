@@ -31,10 +31,11 @@ const DONE: u8 = 2;
 pub(crate) const LISTED: u8 = 3;
 
 /// Bytes of title memory on their way at most: past it uploads go into the
-/// lists, as before.
+/// lists, as before. Balanced for 16 GB RAM / 8 GB VRAM laptops so long heist
+/// sessions do not exhaust system commit (`E_OUTOFMEMORY`).
 const MOST: u64 = 96 << 20;
 /// Bytes and textures of one submission at most.
-const BATCH: (u64, usize) = (16 << 20, 64);
+const BATCH: (u64, usize) = (16 << 20, 128);
 
 /// Whether it is on (`VICTORY_UPLOAD_AHEAD`; off).
 pub(crate) fn on() -> bool {
@@ -177,9 +178,23 @@ fn workers() -> Option<&'static ID3D12CommandQueue> {
                     })
                     .ok()?
             };
-            for n in 0..2 {
+            let n_workers = std::thread::available_parallelism()
+                .map_or(4, |n| (n.get() / 4).clamp(2, 4));
+            for n in 0..n_workers {
                 let worker = Worker::new(&host.device, queue.clone()).ok()?;
-                std::thread::Builder::new().name(format!("uploads ahead {n}")).spawn(move || worker.work()).ok()?;
+                std::thread::Builder::new()
+                    .name(format!("uploads ahead {n}"))
+                    .spawn(move || {
+                        // Keep ahead-upload workers below normal priority so they
+                        // never preempt real-time audio (XMA/FMOD) or main frame prep.
+                        use windows_sys::Win32::System::Threading::{
+                            GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL,
+                        };
+                        // SAFETY: raising/lowering the current worker thread's own priority.
+                        unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL) };
+                        worker.work();
+                    })
+                    .ok()?;
             }
             Some(Queue(queue))
         })

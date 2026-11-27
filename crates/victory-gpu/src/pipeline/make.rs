@@ -42,8 +42,11 @@ pub(crate) struct Pending {
     /// whether a draw or dispatch has requested it yet.
     key: String,
     used: AtomicBool,
-    /// A pass over the screen ([`GraphicsState::screen_pass`]).
+    /// A pass over the screen ([`GraphicsState::screen_pass`]) or critical one-shot producer.
     screen: bool,
+    /// The title dispatches this head blend-shape map (`61e54e90adccaf6a`) only once;
+    /// dropping it leaves faces/mouths stretched (avatarmanz/VIctory-7900XTX#166, vicetay #372).
+    head_map: bool,
     /// LOCAL: how long draws have waited for it so far, in microseconds
     /// ([`wait_once`]).
     waited_us: AtomicU64,
@@ -68,10 +71,13 @@ impl Pending {
             key.update(s.hash.as_bytes());
         }
         key.update(graphics.as_ref().map(|g| g.describe()).unwrap_or_default().as_bytes());
+        let head_map = graphics.is_none()
+            && matches!(&shaders[..], [s] if s.stage == "compute" && s.hash == "61e54e90adccaf6a");
         Pending {
             formats: graphics.as_ref().map_or([0; 9], |g| g.formats()),
             variant: OnceLock::new(),
-            screen: graphics.as_ref().is_some_and(|g| g.screen_pass()),
+            screen: graphics.as_ref().is_some_and(|g| g.screen_pass()) || head_map,
+            head_map,
             shaders,
             graphics,
             queue_state: AtomicU8::new(NOT_QUEUED),
@@ -247,7 +253,7 @@ pub(crate) fn now(p: &Arc<Pending>) -> bool {
 /// At the title's creation of a pipeline: starts it at once if an earlier
 /// run drew with it (during loading, so the world's first frames find it).
 pub(crate) fn early(p: &Arc<Pending>) {
-    if !p.shaders.is_empty() && super::library::wanted_early(&p.key) {
+    if !p.shaders.is_empty() && (p.head_map || super::library::wanted_early(&p.key)) {
         super::library::EARLY.fetch_add(1, Ordering::Relaxed);
         start(p, EARLY);
     }
@@ -424,7 +430,9 @@ impl Queue {
             return None;
         }
         p.queue_state.store(priority, Ordering::Relaxed);
-        if priority == REQUESTED && p.screen && screens_first() {
+        if priority == REQUESTED && p.head_map {
+            self.screen.push_front(p.clone());
+        } else if priority == REQUESTED && p.screen && screens_first() {
             self.screen.push_back(p.clone());
         } else if priority == REQUESTED {
             self.requested.push_back(p.clone());

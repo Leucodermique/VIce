@@ -3,6 +3,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
+import atexit
 import ctypes
 import ctypes.wintypes as wt
 import hashlib
@@ -16,6 +17,14 @@ import subprocess
 import sys
 import threading
 import time
+
+try:
+    from discord_rpc import VicePresenceManager
+except ImportError:
+    try:
+        from launcher.studio.discord_rpc import VicePresenceManager
+    except ImportError:
+        VicePresenceManager = None
 
 BASE = Path(__file__).resolve().parent
 ENGINE = BASE.parents[1]
@@ -31,6 +40,8 @@ LAST_ATTEMPT = 0.0
 
 PROC_LOCK = threading.Lock()
 PROC = None
+RPC = None
+LAST_RES_PRESET = "1080p"
 LIVE_LOCK = threading.Lock()
 LIVE_LINES = deque(maxlen=600)
 LIVE_STATE = {
@@ -363,6 +374,8 @@ def stop_game():
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
         killed = True
+    if RPC is not None:
+        RPC.notify()
     return killed or bool(pids)
 
 
@@ -572,7 +585,10 @@ def launch_game(cfg, developer):
     if title is None or not title.is_file():
         raise ValueError("Jeu introuvable (game_scarlett_master.exe).")
 
+    global LAST_RES_PRESET
     res_preset = str(cfg.get("resolution", "")).strip().lower()
+    if res_preset in ("4k", "1080p-hq", "1080p", "720p"):
+        LAST_RES_PRESET = res_preset.upper() if res_preset == "4k" else res_preset
     if res_preset == "4k":
         console, render_scale = "series-x", "0.5"
     elif res_preset == "1080p-hq":
@@ -618,33 +634,36 @@ def launch_game(cfg, developer):
         env["VICTORY_TITLE_PRIORITIES"] = "0"
         env["VICTORY_CARD_AWAKE"] = "1"
         env["VICTORY_SHOW_AFTER"] = "1"
-        env["VICTORY_AMBIENT"] = "off" if bvh_builder else "0.46"
+        env["VICTORY_AMBIENT"] = "off" if bvh_builder else "0.52"
         env["VICTORY_AMBIENT_AIR"] = "0.06"
         env["VICTORY_AMBIENT_MOST"] = "1.05"
+        env["VICTORY_AMBIENT_REFLECT"] = "0" if bvh_builder else "1.15"
+        env["VICTORY_AMBIENT_REFLECT_IN"] = "" if bvh_builder else "CS_TemporalResolve2_Opaque,CS_TemporalResolve1_Alpha"
         env["VICTORY_NAN_SCRUB"] = "1"
         env["VICTORY_D3D12_DRED"] = "light"
         env["VICTORY_THIN"] = "1"
         env["VICTORY_JOIN_PARTS"] = "8"
         env["VICTORY_UPLOAD_AHEAD"] = "1"
-        env["VICTORY_PIPELINE_WAIT_MS"] = "250"
+        env["VICTORY_PIPELINE_WAIT_MS"] = "500"
         env["VICTORY_LATE_WAIT_LISTS"] = "256"
-        env["VICTORY_WIDE_THREADS"] = "12"
-        env["VICTORY_LAND_THREADS"] = "10"
+        env["VICTORY_WIDE_THREADS"] = "8"
+        env["VICTORY_LAND_THREADS"] = "8"
         env["VICTORY_LAND_SKIP"] = "1"
         env["VICTORY_COPY_PLAIN"] = "1"
-        env["VICTORY_DYNAMIC_SLOTS"] = "524288"
+        env["VICTORY_DYNAMIC_SLOTS"] = "393216"
         env["VICTORY_SYNC_NULL_SKIP"] = "1"
         env["VICTORY_RENDER_SCALE"] = render_scale
         env["VICTORY_OWN_UPSCALER"] = "1"
         env["VICTORY_BVH_MISS"] = "0" if bvh_builder else "1"
         env["VICTORY_CARD_BUFFERS_MIN_MB"] = "1"
         env["VICTORY_CARD_BUFFERS_MB"] = "768"
-        env["VICTORY_CARD_ROOM_FOR_TARGETS_MB"] = "1024"
-        env["VICTORY_TEXTURE_ROOM_PERCENT"] = "93"
+        env["VICTORY_MEMORY_CARD_MB"] = "384"
+        env["VICTORY_CARD_ROOM_FOR_TARGETS_MB"] = "512"
+        env["VICTORY_TEXTURE_ROOM_PERCENT"] = "90"
         env["VICTORY_TEXTURE_DROP_MIPS"] = "2"
-        env["VICTORY_TEXTURE_STAGE_MB"] = "256"
+        env["VICTORY_TEXTURE_STAGE_MB"] = "128"
         env["VICTORY_TEXTURE_CATCHUP"] = "1"
-        env["VICTORY_TEXTURE_AWAY_MS"] = "5000"
+        env["VICTORY_TEXTURE_AWAY_MS"] = "1500"
         env["VICTORY_EARLY_TEXTURES_MS"] = "16"
         env["VICTORY_BAKE_TEXTURES_MS"] = "2500"
         env["VICTORY_HEAP_RECHECK_EVERY"] = "30"
@@ -653,6 +672,7 @@ def launch_game(cfg, developer):
         env["VICTORY_VIBRANCE"] = "0.35"
         env["VICTORY_PC_PROMPTS"] = "1"
         env["VICTORY_WINDOWS_BAR_MB"] = "1536"
+        env["VICTORY_DSP_CONVOLVE"] = "0"
         env["VICTORY_NO_WATCHDOG"] = "1"
         env["MIMALLOC_PURGE_DELAY"] = "100"
     else:
@@ -670,33 +690,36 @@ def launch_game(cfg, developer):
         env["VICTORY_TITLE_PRIORITIES"] = "0"
         env["VICTORY_CARD_AWAKE"] = "1"
         env["VICTORY_SHOW_AFTER"] = "1"
-        env["VICTORY_AMBIENT"] = "off" if bvh_builder else "0.46"
+        env["VICTORY_AMBIENT"] = "off" if bvh_builder else "0.52"
         env["VICTORY_AMBIENT_AIR"] = "0.06"
         env["VICTORY_AMBIENT_MOST"] = "1.05"
+        env["VICTORY_AMBIENT_REFLECT"] = "0" if bvh_builder else "1.15"
+        env["VICTORY_AMBIENT_REFLECT_IN"] = "" if bvh_builder else "CS_TemporalResolve2_Opaque,CS_TemporalResolve1_Alpha"
         env["VICTORY_NAN_SCRUB"] = "1"
         env["VICTORY_D3D12_DRED"] = "light"
         env["VICTORY_THIN"] = "1"
         env["VICTORY_JOIN_PARTS"] = "8"
         env["VICTORY_UPLOAD_AHEAD"] = "1"
-        env["VICTORY_PIPELINE_WAIT_MS"] = "250"
+        env["VICTORY_PIPELINE_WAIT_MS"] = "500"
         env["VICTORY_LATE_WAIT_LISTS"] = "256"
-        env["VICTORY_WIDE_THREADS"] = "12"
-        env["VICTORY_LAND_THREADS"] = "10"
+        env["VICTORY_WIDE_THREADS"] = "8"
+        env["VICTORY_LAND_THREADS"] = "8"
         env["VICTORY_LAND_SKIP"] = "1"
         env["VICTORY_COPY_PLAIN"] = "1"
-        env["VICTORY_DYNAMIC_SLOTS"] = "524288"
+        env["VICTORY_DYNAMIC_SLOTS"] = "393216"
         env["VICTORY_SYNC_NULL_SKIP"] = "1"
         env["VICTORY_RENDER_SCALE"] = render_scale
         env["VICTORY_OWN_UPSCALER"] = "1"
         env["VICTORY_BVH_MISS"] = "0" if bvh_builder else "1"
         env["VICTORY_CARD_BUFFERS_MIN_MB"] = "1"
         env["VICTORY_CARD_BUFFERS_MB"] = "768"
-        env["VICTORY_CARD_ROOM_FOR_TARGETS_MB"] = "1024"
-        env["VICTORY_TEXTURE_ROOM_PERCENT"] = "93"
+        env["VICTORY_MEMORY_CARD_MB"] = "384"
+        env["VICTORY_CARD_ROOM_FOR_TARGETS_MB"] = "512"
+        env["VICTORY_TEXTURE_ROOM_PERCENT"] = "90"
         env["VICTORY_TEXTURE_DROP_MIPS"] = "2"
-        env["VICTORY_TEXTURE_STAGE_MB"] = "256"
+        env["VICTORY_TEXTURE_STAGE_MB"] = "128"
         env["VICTORY_TEXTURE_CATCHUP"] = "1"
-        env["VICTORY_TEXTURE_AWAY_MS"] = "5000"
+        env["VICTORY_TEXTURE_AWAY_MS"] = "1500"
         env["VICTORY_EARLY_TEXTURES_MS"] = "16"
         env["VICTORY_BAKE_TEXTURES_MS"] = "2500"
         env["VICTORY_HEAP_RECHECK_EVERY"] = "30"
@@ -705,6 +728,7 @@ def launch_game(cfg, developer):
         env["VICTORY_VIBRANCE"] = "0.35"
         env["VICTORY_PC_PROMPTS"] = "1"
         env["VICTORY_WINDOWS_BAR_MB"] = "1536"
+        env["VICTORY_DSP_CONVOLVE"] = "0"
         env["VICTORY_NO_WATCHDOG"] = "1"
         env["MIMALLOC_PURGE_DELAY"] = "100"
 
@@ -755,6 +779,8 @@ def launch_game(cfg, developer):
             creationflags=subprocess.CREATE_NO_WINDOW | subprocess.HIGH_PRIORITY_CLASS,
         )
         PROC = proc
+        if RPC is not None:
+            RPC.notify()
         try:
             _user32.AllowSetForegroundWindow(_ASFW_ANY)
             _user32.AllowSetForegroundWindow(proc.pid)
@@ -813,7 +839,7 @@ def launch_game(cfg, developer):
                     f"Engine: {engine}",
                     f"Engine build: {datetime.fromtimestamp(engine.stat().st_mtime).isoformat(timespec='seconds')}",
                     f"Console: {console} | FastGPU: {int(fast_gpu)} | BVH: {int(bvh_builder)}",
-                    f"GPU opts: Scale={env.get('VICTORY_RENDER_SCALE', '1')} | OwnUpscaler={env.get('VICTORY_OWN_UPSCALER', '0')} | Compose={env.get('VICTORY_COMPOSE', '0')} | Sharp={env.get('VICTORY_SHARPEN', '0')} | DropMips={env.get('VICTORY_TEXTURE_DROP_MIPS', '0')} | LateLists={env.get('VICTORY_LATE_WAIT_LISTS', '')} | BVHMiss={env.get('VICTORY_BVH_MISS', '0')} | NanScrub={env.get('VICTORY_NAN_SCRUB', '0')} | Ambient={env.get('VICTORY_AMBIENT', 'off')}(air={env.get('VICTORY_AMBIENT_AIR', '')},most={env.get('VICTORY_AMBIENT_MOST', '')}) | SkipRT={len(env.get('VICTORY_SKIP_PIPELINES', '').splitlines())} | DynSlots={env.get('VICTORY_DYNAMIC_SLOTS', '')} | CardBuf={env.get('VICTORY_CARD_BUFFERS_MB')}MB(min={env.get('VICTORY_CARD_BUFFERS_MIN_MB', '1')}MB) | WinBAR={env.get('VICTORY_WINDOWS_BAR_MB', '0')}MB(WinKB={env.get('VICTORY_WINDOW_KB', '4096')},Tails={env.get('VICTORY_WINDOW_TAILS', '0')}) | Relay={env.get('VICTORY_RELAY', '0')}/CardSteps={env.get('VICTORY_CARD_STEPS', '0')}/NoWait={env.get('VICTORY_TEXTURE_NO_WAIT', '0')}",
+                    f"GPU opts: Scale={env.get('VICTORY_RENDER_SCALE', '1')} | OwnUpscaler={env.get('VICTORY_OWN_UPSCALER', '0')} | Compose={env.get('VICTORY_COMPOSE', '0')} | Sharp={env.get('VICTORY_SHARPEN', '0')} | DropMips={env.get('VICTORY_TEXTURE_DROP_MIPS', '0')} | LateLists={env.get('VICTORY_LATE_WAIT_LISTS', '')} | BVHMiss={env.get('VICTORY_BVH_MISS', '0')} | NanScrub={env.get('VICTORY_NAN_SCRUB', '0')} | Ambient={env.get('VICTORY_AMBIENT', 'off')}(air={env.get('VICTORY_AMBIENT_AIR', '')},most={env.get('VICTORY_AMBIENT_MOST', '')},reflect={env.get('VICTORY_AMBIENT_REFLECT', '0')}) | SkipRT={len(env.get('VICTORY_SKIP_PIPELINES', '').splitlines())} | DynSlots={env.get('VICTORY_DYNAMIC_SLOTS', '')} | CardBuf={env.get('VICTORY_CARD_BUFFERS_MB')}MB(min={env.get('VICTORY_CARD_BUFFERS_MIN_MB', '1')}MB) | WinBAR={env.get('VICTORY_WINDOWS_BAR_MB', '0')}MB(WinKB={env.get('VICTORY_WINDOW_KB', '4096')},Tails={env.get('VICTORY_WINDOW_TAILS', '0')}) | Relay={env.get('VICTORY_RELAY', '0')}/CardSteps={env.get('VICTORY_CARD_STEPS', '0')}/NoWait={env.get('VICTORY_TEXTURE_NO_WAIT', '0')}",
                     f"Direct3D debug: {env.get('VICTORY_D3D12_DEBUG', '0')} | Surface: {env.get('VICE_SURFACE_STATS', '0')} | WARP: {env.get('VICTORY_D3D12_WARP', '0')}",
                 ]
                 for h in header:
@@ -1045,6 +1071,28 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
+def _rpc_state():
+    running, _, _, _ = game_status()
+    with LIVE_LOCK:
+        fps = LIVE_STATE.get("fps") if running else None
+    return {
+        "running": running,
+        "resolution": LAST_RES_PRESET,
+        "fps": fps,
+    }
+
+
+def start_discord_rpc():
+    global RPC
+    if VicePresenceManager is None or RPC is not None:
+        return
+    if os.environ.get("VICE_DISCORD_RPC") == "0":
+        return
+    RPC = VicePresenceManager(_rpc_state, interval=15.0)
+    RPC.start()
+    atexit.register(RPC.stop)
+
+
 if __name__ == "__main__":
     if "--self-test" in sys.argv:
         st = build_state()
@@ -1097,4 +1145,10 @@ if __name__ == "__main__":
 
             webbrowser.open(url)
     if not existing:
-        server.serve_forever()
+        if "--no-browser" not in sys.argv:
+            start_discord_rpc()
+        try:
+            server.serve_forever()
+        finally:
+            if RPC is not None:
+                RPC.stop()

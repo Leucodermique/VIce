@@ -2038,6 +2038,12 @@ fn unguard(g: &mut Guards, blocks: &[usize]) {
 /// The runtime calls it (as `kernel_will_write`) before the title's kernel
 /// reads into its own memory.
 pub fn writing(at: usize, len: usize) {
+    open_for_write(at, len);
+    // A placed texture there changes with no descriptor written.
+    crate::descriptor::host::remapped(at, len);
+}
+
+fn open_for_write(at: usize, len: usize) {
     // The length is the title's (`fread`'s size times count, saturated).
     let last = at.saturating_add(len).div_ceil(BLOCK);
     if !light() || PROTECTED.any(at / BLOCK, last) {
@@ -2050,8 +2056,23 @@ pub fn writing(at: usize, len: usize) {
         }
         let _ = opened;
     }
-    // A placed texture there changes with no descriptor written.
-    crate::descriptor::host::remapped(at, len);
+}
+
+/// Open the guards before a copy we perform ourselves (`host::copy_mapped`).
+/// Its texture notification follows on drop (after the bytes are written),
+/// preventing concurrent texture passes from uploading stale pre-copy bytes
+/// (ported from Vice-Tay fbfdd3e9).
+pub(crate) fn copying_to_title(at: usize, len: usize) -> TitleCopy {
+    open_for_write(at, len);
+    TitleCopy(at, len)
+}
+
+pub(crate) struct TitleCopy(usize, usize);
+
+impl Drop for TitleCopy {
+    fn drop(&mut self) {
+        crate::descriptor::host::remapped(self.0, self.1);
+    }
 }
 
 /// The kernel writes title memory `[at, at + len)` until what this returns
