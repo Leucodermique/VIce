@@ -622,9 +622,11 @@ def launch_game(cfg, developer):
         env["VICTORY_AMBIENT_AIR"] = "0.06"
         env["VICTORY_AMBIENT_MOST"] = "0.90"
         env["VICTORY_NAN_SCRUB"] = "1"
+        env["VICTORY_SHADER_FAST_BITS"] = "24"
         env["VICTORY_D3D12_DRED"] = "light"
         env["VICTORY_THIN"] = "1"
-        env["VICTORY_JOIN_PARTS"] = "8"
+        env["VICTORY_JOIN_PARTS"] = "16"
+        env["VICTORY_JOIN_LISTS"] = "128"
         env["VICTORY_UPLOAD_AHEAD"] = "1"
         env["VICTORY_PIPELINE_WAIT_MS"] = "250"
         env["VICTORY_LATE_WAIT_LISTS"] = "512"
@@ -678,9 +680,11 @@ def launch_game(cfg, developer):
         env["VICTORY_AMBIENT_AIR"] = "0.06"
         env["VICTORY_AMBIENT_MOST"] = "0.90"
         env["VICTORY_NAN_SCRUB"] = "1"
+        env["VICTORY_SHADER_FAST_BITS"] = "24"
         env["VICTORY_D3D12_DRED"] = "light"
         env["VICTORY_THIN"] = "1"
-        env["VICTORY_JOIN_PARTS"] = "8"
+        env["VICTORY_JOIN_PARTS"] = "16"
+        env["VICTORY_JOIN_LISTS"] = "128"
         env["VICTORY_UPLOAD_AHEAD"] = "1"
         env["VICTORY_PIPELINE_WAIT_MS"] = "250"
         env["VICTORY_LATE_WAIT_LISTS"] = "512"
@@ -821,7 +825,7 @@ def launch_game(cfg, developer):
                     f"Engine: {engine}",
                     f"Engine build: {datetime.fromtimestamp(engine.stat().st_mtime).isoformat(timespec='seconds')}",
                     f"Console: {console} | FastGPU: {int(fast_gpu)} | BVH: {int(bvh_builder)}",
-                    f"GPU opts: Scale={env.get('VICTORY_RENDER_SCALE', '1')} | OwnUpscaler={env.get('VICTORY_OWN_UPSCALER', '0')} | Compose={env.get('VICTORY_COMPOSE', '0')} | Sharp={env.get('VICTORY_SHARPEN', '0')} | CopyPlain={env.get('VICTORY_COPY_PLAIN', '0')} | TexFill={env.get('VICTORY_TEXTURE_FILL', '0')} | PageWrites={env.get('VICTORY_PAGE_WRITES', '0')} | LevelsOnDemand={env.get('VICTORY_LEVELS_ON_DEMAND', '0')} | Relook={env.get('VICTORY_RELOOK_MS', '20000')}ms | BVHMiss={env.get('VICTORY_BVH_MISS', '0')} | NanScrub={env.get('VICTORY_NAN_SCRUB', '0')} | Ambient={env.get('VICTORY_AMBIENT', 'off')}(air={env.get('VICTORY_AMBIENT_AIR', '')},most={env.get('VICTORY_AMBIENT_MOST', '')}) | SkipRT={len(env.get('VICTORY_SKIP_PIPELINES', '').splitlines())} | DynSlots={env.get('VICTORY_DYNAMIC_SLOTS', '')} | CardBuf={env.get('VICTORY_CARD_BUFFERS_MB')}MB | WinBAR={env.get('VICTORY_WINDOWS_BAR_MB', '0')}MB | Relay={env.get('VICTORY_RELAY', '0')}/CardSteps={env.get('VICTORY_CARD_STEPS', '0')}/NoWait={env.get('VICTORY_TEXTURE_NO_WAIT', '0')}",
+                    f"GPU opts: Scale={env.get('VICTORY_RENDER_SCALE', '1')} | OwnUpscaler={env.get('VICTORY_OWN_UPSCALER', '0')} | Compose={env.get('VICTORY_COMPOSE', '0')} | Sharp={env.get('VICTORY_SHARPEN', '0')} | CopyPlain={env.get('VICTORY_COPY_PLAIN', '0')} | TexFill={env.get('VICTORY_TEXTURE_FILL', '0')} | PageWrites={env.get('VICTORY_PAGE_WRITES', '0')} | LevelsOnDemand={env.get('VICTORY_LEVELS_ON_DEMAND', '0')} | Relook={env.get('VICTORY_RELOOK_MS', '20000')}ms | BVHMiss={env.get('VICTORY_BVH_MISS', '0')} | NanScrub={env.get('VICTORY_NAN_SCRUB', '0')} | FastBits={env.get('VICTORY_SHADER_FAST_BITS', '24')} | Join={env.get('VICTORY_JOIN_PARTS', '1')}/{env.get('VICTORY_JOIN_LISTS', '48')} | Ambient={env.get('VICTORY_AMBIENT', 'off')}(air={env.get('VICTORY_AMBIENT_AIR', '')},most={env.get('VICTORY_AMBIENT_MOST', '')}) | SkipRT={len(env.get('VICTORY_SKIP_PIPELINES', '').splitlines())} | DynSlots={env.get('VICTORY_DYNAMIC_SLOTS', '')} | CardBuf={env.get('VICTORY_CARD_BUFFERS_MB')}MB | WinBAR={env.get('VICTORY_WINDOWS_BAR_MB', '0')}MB | Relay={env.get('VICTORY_RELAY', '0')}/CardSteps={env.get('VICTORY_CARD_STEPS', '0')}/NoWait={env.get('VICTORY_TEXTURE_NO_WAIT', '0')}",
                     f"Direct3D debug: {env.get('VICTORY_D3D12_DEBUG', '0')} | Surface: {env.get('VICE_SURFACE_STATS', '0')} | WARP: {env.get('VICTORY_D3D12_WARP', '0')}",
                 ]
                 for h in header:
