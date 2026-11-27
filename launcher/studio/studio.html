@@ -739,9 +739,8 @@ select:focus,input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(16
           <strong data-i18n="res_label">Résolution</strong>
         </div>
         <select id="opt-resolution">
-          <option value="1080p" data-i18n="res_1080">1080p · Équilibré</option>
+          <option value="1080p" data-i18n="res_1080">1080p</option>
           <option value="1080p-hq" data-i18n="res_1080_hq">1080p · Qualité</option>
-          <option value="1440p" data-i18n="res_1440">1440p · DLSS</option>
           <option value="720p" data-i18n="res_720">720p · Performance</option>
           <option value="4k" data-i18n="res_4k">4K · Ultra</option>
         </select>
@@ -749,15 +748,9 @@ select:focus,input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(16
 
       <div class="row">
         <div class="row-label">
-          <strong data-i18n="fluidity_label">Fluidité &amp; DLSS</strong>
-          <small data-i18n="fluidity_hint">Upscaling RTX + génération d’images</small>
+          <strong data-i18n="sm_label">Smooth Motion</strong>
         </div>
-        <select id="opt-fluidity">
-          <option value="smooth-motion" data-i18n="fl_sm">DLSS + Smooth Motion</option>
-          <option value="dlss-fg" data-i18n="fl_fg">DLSS + Frame Gen 2×</option>
-          <option value="dlss" data-i18n="fl_dlss">DLSS seul</option>
-          <option value="native" data-i18n="fl_native">Natif (sans DLSS)</option>
-        </select>
+        <label class="switch"><input id="opt-sm" type="checkbox" checked><span class="slider"></span></label>
       </div>
 
       <div class="row">
@@ -932,19 +925,11 @@ const I18N = {
     nav_logs: "Journaux",
     nav_settings: "Paramètres",
     res_label: "Résolution",
-    res_1080: "1080p · Équilibré",
+    res_1080: "1080p",
     res_1080_hq: "1080p · Qualité",
-    res_1440: "1440p · DLSS",
     res_720: "720p · Performance",
     res_4k: "4K · Ultra",
-    fluidity_label: "Fluidité & DLSS",
-    fluidity_hint: "Upscaling RTX + génération d’images",
-    fl_sm: "DLSS + Smooth Motion",
-    fl_fg: "DLSS + Frame Gen 2×",
-    fl_dlss: "DLSS seul",
-    fl_native: "Natif (sans DLSS)",
-    skip_intro_label: "Passer les vidéos d’intro",
-    skip_intro_hint: "Chargement direct sans vidéos Bink",
+    sm_label: "Smooth Motion",
     rt_label: "Ray Tracing",
     version_label: "Version du moteur",
     fast_gpu_label: "Accélération GPU RTX",
@@ -980,6 +965,8 @@ const I18N = {
     lang_hint: "Français (principal) ou English (secondaire)",
     intro_label: "Animation d’ouverture",
     intro_hint: "Rejouer le logo animé VIce Studio",
+    skip_intro_label: "Passer les vidéos d’intro",
+    skip_intro_hint: "Chargement direct sans vidéos Bink",
     btn_replay: "Rejouer",
     dev_label: "Mode développeur",
     dev_pw_label: "Mot de passe développeur",
@@ -1045,19 +1032,11 @@ const I18N = {
     nav_logs: "Logs",
     nav_settings: "Settings",
     res_label: "Resolution",
-    res_1080: "1080p · Balanced",
+    res_1080: "1080p",
     res_1080_hq: "1080p · Quality",
-    res_1440: "1440p · DLSS",
     res_720: "720p · Performance",
     res_4k: "4K · Ultra",
-    fluidity_label: "Fluidity & DLSS",
-    fluidity_hint: "RTX Upscaling + Frame Generation",
-    fl_sm: "DLSS + Smooth Motion",
-    fl_fg: "DLSS + Frame Gen 2×",
-    fl_dlss: "DLSS only",
-    fl_native: "Native (no DLSS)",
-    skip_intro_label: "Skip intro videos",
-    skip_intro_hint: "Faster loading without Bink intros",
+    sm_label: "Smooth Motion",
     rt_label: "Ray Tracing",
     version_label: "Engine build",
     fast_gpu_label: "RTX GPU Acceleration",
@@ -1277,13 +1256,13 @@ let msgKey = "msg_ready";
   requestAnimationFrame(draw);
 })();
 
-const PREF_KEY = "vice_studio_prefs_v7";
+const PREF_KEY = "vice_studio_prefs_v5";
 function loadPrefs() {
   try {
     const p = JSON.parse(localStorage.getItem(PREF_KEY) || "{}");
     if (p.lang === "fr" || p.lang === "en") lang = p.lang;
     if (p.resolution) $("opt-resolution").value = p.resolution;
-    if (p.fluidity) $("opt-fluidity").value = p.fluidity;
+    if (typeof p.smoothMotion === "boolean") $("opt-sm").checked = p.smoothMotion;
     if (typeof p.skipIntro === "boolean") $("opt-skip-intro").checked = p.skipIntro;
     if (typeof p.bvhBuilder === "boolean") $("opt-rt").checked = p.bvhBuilder;
     if (typeof p.fastGpu === "boolean") $("opt-fast").checked = p.fastGpu;
@@ -1295,7 +1274,7 @@ function savePrefs() {
     localStorage.setItem(PREF_KEY, JSON.stringify({
       lang,
       resolution: $("opt-resolution").value,
-      fluidity: $("opt-fluidity").value,
+      smoothMotion: $("opt-sm").checked,
       skipIntro: $("opt-skip-intro").checked,
       bvhBuilder: $("opt-rt").checked,
       fastGpu: $("opt-fast").checked,
@@ -1327,7 +1306,7 @@ function applyLanguage(newLang) {
 
 document.querySelectorAll(".lang-btn").forEach(b => b.onclick = () => applyLanguage(b.dataset.lang));
 $("opt-lang").onchange = () => applyLanguage($("opt-lang").value);
-["opt-resolution","opt-fluidity","opt-skip-intro","opt-rt","opt-fast","opt-dstorage"].forEach(id => $(id).addEventListener("change", savePrefs));
+["opt-resolution","opt-sm","opt-skip-intro","opt-rt","opt-fast","opt-dstorage"].forEach(id => $(id).addEventListener("change", savePrefs));
 loadPrefs();
 
 // Intro cinématique d'ouverture
@@ -1654,7 +1633,7 @@ $("btn-play").onclick = async () => {
         body: JSON.stringify({
           version: $("opt-version").value,
           resolution: $("opt-resolution").value,
-          fluidity: $("opt-fluidity").value,
+          smoothMotion: $("opt-sm").checked,
           skipIntro: $("opt-skip-intro").checked,
           bvhBuilder: $("opt-rt").checked,
           fastGpu: $("opt-fast").checked,

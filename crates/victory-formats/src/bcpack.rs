@@ -1372,8 +1372,6 @@ mod tests {
         record[20] = zigzag(6);
         record[21] = zigzag(14);
 
-        // Modes without a BC7 rotation field must ignore ctrl bits 4:3 instead of
-        // panicking on shift overflow (modes 0/1/3 with rot=1) or corrupting channels.
         for (mode, subsets) in [(0u16, 3u16), (1, 2), (2, 3), (3, 2), (6, 1), (7, 2)] {
             let base_ctrl = (subsets << 6) | mode;
             let base_tables = tables_for(base_ctrl);
@@ -1396,7 +1394,6 @@ mod tests {
             }
         }
 
-        // Modes 4 and 5 do have a 2-bit rotation field: rotation swaps alpha with channel rot-1.
         for (mode, base_bits) in [(4u16, [5u8, 5, 5, 6]), (5u16, [7u8, 7, 7, 8])] {
             for rot in 1..=3usize {
                 let ctrl = (1 << 6) | ((rot as u16) << 3) | mode;
@@ -1405,18 +1402,17 @@ mod tests {
                 assert_eq!(bc7_precision(ctrl), expected_prec, "mode {mode} rot {rot}");
             }
 
-            // Decode mode 4/5 with rot=1 (swap R and A) and check the packed BC7 block.
             let ctrl = (1 << 6) | (1 << 3) | mode;
             let t = tables_for(ctrl);
             let mut s = vec![0u8; 32];
-            s[4] = zigzag(0x21); // stored R0 (holds alpha precision after rot=1)
-            s[5] = zigzag(0x12); // stored R1
-            s[6] = zigzag(0x05); // stored G0
-            s[7] = zigzag(0x06); // stored G1
-            s[8] = zigzag(0x09); // stored B0
-            s[9] = zigzag(0x0a); // stored B1
-            s[10] = zigzag(0x0d); // stored A0 (holds color precision after rot=1)
-            s[11] = zigzag(0x0e); // stored A1
+            s[4] = zigzag(0x21);
+            s[5] = zigzag(0x12);
+            s[6] = zigzag(0x05);
+            s[7] = zigzag(0x06);
+            s[8] = zigzag(0x09);
+            s[9] = zigzag(0x0a);
+            s[10] = zigzag(0x0d);
+            s[11] = zigzag(0x0e);
             let src = stream(&t, &BC7_WIDTHS, 2, &[s]);
             let mut dst = [0u8; 16];
             decode(7, &src, &mut dst, &t).unwrap();
@@ -1425,11 +1421,10 @@ mod tests {
             let alpha_bits = u32::from(base_bits[3]);
             let mut w = Bits::default();
             w.put(1 << mode, u32::from(mode) + 1);
-            w.put(1, 2); // rotation = 1
+            w.put(1, 2);
             if mode == 4 {
-                w.put(0, 1); // indexSelectionBit = 0
+                w.put(0, 1);
             }
-            // Endpoint order after rot=1 swaps indices 3 and 0: [3 (R), 1 (G), 2 (B), 0 (A)].
             for (v, n) in [
                 (0x0d, color_bits),
                 (0x0e, color_bits),
