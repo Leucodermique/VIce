@@ -133,6 +133,11 @@ pub(crate) struct Translated {
     /// Whether the shader's code can store to buffer memory ([`stores`]);
     /// true when its code is not known.
     pub(crate) stores: bool,
+    /// Per [`Translated::used`] entry: a store or atomic names that buffer
+    /// descriptor. Empty when the code is not known.
+    pub(crate) used_written: Vec<bool>,
+    /// A buffer store whose descriptor could not be matched to `used`.
+    pub(crate) write_unknown: bool,
     /// Whether it can store through raw addresses ([`stores_by_address`]).
     pub(crate) stores_by_address: bool,
     /// Whether it stores through a view it picks from the heap by an index,
@@ -212,21 +217,27 @@ fn translate(container: &[u8]) -> Result<Translated, String> {
         _ => None,
     });
     let stores_by_address = programs.is_empty() || programs.iter().any(stores_by_address);
-    let used = programs
-        .into_iter()
-        .find(|p| {
-            matches!(
-                p.stage,
-                HwStage::Vs | HwStage::Ps | HwStage::Ms | HwStage::Cs
-            )
-        })
-        .map(|p| p.used)
-        .unwrap_or_default();
+    let chosen = programs.iter().find(|p| {
+        matches!(
+            p.stage,
+            HwStage::Vs | HwStage::Ps | HwStage::Ms | HwStage::Cs
+        )
+    });
+    let used = chosen.map(|p| p.used.to_vec()).unwrap_or_default();
+    let (used_written, mut write_unknown) = chosen
+        .map(|p| written_used(p, &used))
+        .unwrap_or((Vec::new(), !programs.is_empty()));
+    if programs.len() > 1 {
+        // Another stage's table store could name the same descriptor.
+        write_unknown = true;
+    }
     Ok(Translated {
         host,
         threads,
         used,
         stores,
+        used_written,
+        write_unknown,
         stores_by_address,
         picks: Default::default(),
     })
@@ -384,6 +395,70 @@ fn stores(program: &victory_shader::NativeProgram) -> bool {
             _ => false,
         }
     })
+}
+
+/// Which [`Translated::used`] buffer descriptors a store or atomic names.
+/// The descriptor is the instruction's `rsrc`/SMEM base SGPR; a store whose
+/// descriptor is computed in VGPRs, or names a descriptor outside `used`,
+/// leaves [`Translated::write_unknown`] set.
+#[cfg(windows)]
+fn written_used(
+    program: &victory_shader::NativeProgram,
+    used: &[victory_shader::UsedResource],
+) -> (Vec<bool>, bool) {
+    use victory_shader::gfx10::{Encoding, Fields, Operand, decode};
+    let Ok(code) = decode(&program.code) else {
+        return (vec![true; used.len()], true);
+    };
+    let mut written = vec![false; used.len()];
+    let mut unknown = false;
+    for inst in code.iter() {
+        let name = inst.name();
+        let is_store = match inst.encoding {
+            Encoding::Mubuf | Encoding::Mtbuf | Encoding::Smem => {
+                name.is_none_or(|n| (n.contains("store") || n.contains("atomic")) && !n.contains("scratch"))
+            }
+            Encoding::Flat | Encoding::Global => {
+                if name.is_none_or(|n| (n.contains("store") || n.contains("atomic")) && !n.contains("scratch")) {
+                    unknown = true;
+                }
+                false
+            }
+            Encoding::Sop1 => {
+                if name.is_none_or(|n| matches!(n, "s_setpc_b64" | "s_swappc_b64")) {
+                    unknown = true;
+                }
+                false
+            }
+            _ => false,
+        };
+        if !is_store {
+            continue;
+        }
+        let fields = inst.fields(program.wave64);
+        let descriptor = match &fields {
+            Fields::Buffer { rsrc, .. } => Some(rsrc),
+            Fields::Smem { base, .. } => Some(base),
+            _ => None,
+        };
+        let Some(Operand::Scalar { code, .. }) = descriptor else {
+            unknown = true;
+            continue;
+        };
+        let mut hit = false;
+        for (i, resource) in used.iter().enumerate() {
+            if resource.kind == victory_shader::ResourceType::Uav
+                && resource.lower_bound == u32::from(*code)
+            {
+                written[i] = true;
+                hit = true;
+            }
+        }
+        if !hit {
+            unknown = true;
+        }
+    }
+    (written, unknown)
 }
 
 /// Whether a console program can store to memory through raw addresses
