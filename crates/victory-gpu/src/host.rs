@@ -154,10 +154,10 @@ pub(crate) fn vram_keep(budget: u64, used: u64) -> (u64, u64) {
         return (IDLE_MS, u64::MAX);
     }
     let share = |percent: u64| budget / 100 * percent;
-    // 8 GB laptop GPUs (DXGI budget ~7.0-7.4 GB): start reclaiming idle textures
-    // just early enough to prevent WDDM PCIe spillover without starving scene textures.
+    // 8 GB laptop GPUs (DXGI budget ~7.0-7.4 GB): balanced reclamation threshold
+    // so textures stay loaded without pushing WDDM into 16 GB system RAM.
     let (soft, hard, target) = if budget <= LOW_VRAM_BUDGET {
-        (87, 93, 83)
+        (85, 91, 80)
     } else {
         (88, 95, 85)
     };
@@ -6906,15 +6906,7 @@ impl HostList {
     /// shortcut: one buffer per copy; pool them once uploads are frequent.
     pub(crate) fn upload(&self, host: &Host, size: u64) -> Option<(ID3D12Resource, *mut u8)> {
         // With [`card_steps`] the card may be the one that fills it.
-        // The buffer belongs strictly to this recording list (never exposed in a
-        // shared descriptor heap read by earlier in-flight lists), so D3D12
-        // guarantees it is resident/mapped before this list runs without synchronous
-        // MakeResident + Aside queue stalls (~15,000 stalls / 16s per session saved).
-        let (buffer, data) = if card_steps::stage() > 1 {
-            host.shared_buffer_for_list(size)?
-        } else {
-            host.upload_buffer(size)?
-        };
+        let (buffer, data) = if card_steps::stage() > 1 { host.shared_buffer(size)? } else { host.upload_buffer(size)? };
         name(&buffer, || format!("list upload {size:#x}"));
         self.deferred().hold_upload(buffer.clone(), size);
         Some((buffer, data))
@@ -9333,67 +9325,6 @@ impl Host {
             Ok(()) => Some((buffer?, data.cast())),
             Err(e) => {
                 tracing::warn!(error = %e, size, "no shared buffer");
-                None
-            }
-        }
-    }
-
-    /// Same system-memory write-back UAV buffer as [`Host::shared_buffer`], but
-    /// created resident directly (`D3D12_HEAP_FLAG_NONE`) without synchronous
-    /// `MakeResident` / `Aside` fence waits. Safe for buffers strictly owned by
-    /// a list being recorded (never written into a bindless heap read by earlier
-    /// already-submitted lists): D3D12 maps the buffer before this list runs.
-    pub(crate) fn shared_buffer_for_list(&self, size: u64) -> Option<(ID3D12Resource, *mut u8)> {
-        MADE[2].fetch_add(1, Ordering::Relaxed);
-        MADE[3].fetch_add(size, Ordering::Relaxed);
-        let heap = D3D12_HEAP_PROPERTIES {
-            Type: D3D12_HEAP_TYPE_CUSTOM,
-            CPUPageProperty: D3D12_CPU_PAGE_PROPERTY_WRITE_BACK,
-            MemoryPoolPreference: D3D12_MEMORY_POOL_L0,
-            ..Default::default()
-        };
-        let desc = D3D12_RESOURCE_DESC {
-            Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
-            Width: size.max(1),
-            Height: 1,
-            DepthOrArraySize: 1,
-            MipLevels: 1,
-            SampleDesc: DXGI_SAMPLE_DESC {
-                Count: 1,
-                Quality: 0,
-            },
-            Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
-            Flags: D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
-            ..Default::default()
-        };
-        let mut buffer: Option<ID3D12Resource> = None;
-        let mut data = std::ptr::null_mut();
-        // SAFETY: plain creation and mapping of a CPU-visible list-local buffer.
-        let made = unsafe {
-            self.device
-                .CreateCommittedResource(
-                    &heap,
-                    D3D12_HEAP_FLAG_NONE,
-                    &desc,
-                    D3D12_RESOURCE_STATE_COMMON,
-                    None,
-                    &mut buffer,
-                )
-                .and_then(|()| {
-                    let b = buffer.as_ref().ok_or_else(windows::core::Error::empty)?;
-                    b.Map(0, None, Some(&mut data))
-                })
-        };
-        #[cfg(feature = "diagnostics")]
-        if made.is_ok()
-            && let Some(b) = &buffer
-        {
-            crate::book::made(b, || "a list-local shared buffer".into());
-        }
-        match made {
-            Ok(()) => Some((buffer?, data.cast())),
-            Err(e) => {
-                tracing::warn!(error = %e, size, "no list-local shared buffer");
                 None
             }
         }

@@ -643,27 +643,29 @@ float3 sharpen_game(int2 p) {
 }
 
 // Vice City vitality color-grading pass (game plane only, never touches UI/HUD/prompts):
-// 1) Gentle shadow lift for indoor readability without washing out pure blacks.
+// 1) Micro shadow lift strictly in dark shadows (luma < 0.24) so indoor scenes keep
+//    readability without ever brightening sunlit faces or skies.
 // 2) Smart vibrance that enriches muted/mid-saturated colors while protecting skin tones
-//    and already-vivid highlights from clipping.
-// 3) Subtle filmic S-curve contrast for crisp depth and lively light response.
+//    and bright highlights from clipping.
+// 3) Gentle highlight rolloff + subtle contrast so sunlit scenes stay rich, never blown out.
 float3 grade_game(float3 c) {
     if (vibrance <= 0.001) return c;
     float luma = dot(c, LUMA);
-    float shadow_mask = smoothstep(0.015, 0.22, luma) * (1.0 - smoothstep(0.32, 0.78, luma));
-    c += c * (0.14 * vibrance * shadow_mask) + float3(0.012, 0.011, 0.010) * (vibrance * shadow_mask);
+    float shadow_mask = smoothstep(0.015, 0.12, luma) * (1.0 - smoothstep(0.14, 0.30, luma));
+    c += c * (0.08 * vibrance * shadow_mask);
 
     float hi = max(c.r, max(c.g, c.b));
     float lo = min(c.r, min(c.g, c.b));
     float sat = (hi > 1e-4) ? ((hi - lo) / hi) : 0.0;
     float l2 = dot(c, LUMA);
-    float luma_guard = smoothstep(0.03, 0.14, l2) * (1.0 - smoothstep(0.84, 0.99, l2));
+    float luma_guard = smoothstep(0.025, 0.12, l2) * (1.0 - smoothstep(0.78, 0.96, l2));
     float skin = saturate(1.0 - abs(c.r - c.g * 1.28) * 3.0) * smoothstep(0.05, 0.20, c.r - c.b);
-    float vib_boost = vibrance * (1.0 - sat * 0.72) * luma_guard * (1.0 - 0.30 * skin);
-    c = lerp(float3(l2, l2, l2), c, 1.0 + vib_boost * 1.15);
+    float vib_boost = vibrance * (1.0 - sat * 0.68) * luma_guard * (1.0 - 0.32 * skin);
+    c = lerp(float3(l2, l2, l2), c, 1.0 + vib_boost * 1.25);
 
+    // Subtle filmic contrast without pushing brights past 1.0
     float3 s_curve = c * c * (3.0 - 2.0 * c);
-    c = lerp(c, s_curve, 0.14 * vibrance);
+    c = lerp(c, s_curve, 0.12 * vibrance);
     return saturate(c);
 }
 

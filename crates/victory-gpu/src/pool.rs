@@ -30,10 +30,8 @@ use windows::core::{GUID, HRESULT, IUnknown, Interface};
 const BLOCK: u64 = 64 << 20;
 /// Blocks with nothing in them that are kept.
 const SPARE: usize = 2;
-/// The same while the card has room ([`room`]): 4 GiB of them on 12+ GiB cards,
-/// capped at 384 MiB (6 blocks) on 8 GiB laptops to stop VRAM yo-yoing.
+/// The same while the card has room ([`room`]): 4 GiB of them.
 const SPARE_KEPT: usize = 64;
-const SPARE_KEPT_8GB: usize = 6;
 /// The same of blocks of staging buffers, which are the PC's memory: run
 /// crash-1 held 5.2 GB of them.
 const STAGING_KEPT: usize = 8;
@@ -48,16 +46,8 @@ pub(crate) fn room(memory: Option<[u64; 4]>) {
 }
 
 fn spares(memory: Option<[u64; 4]>, keep: bool) -> usize {
-    const ONE_GIB: u64 = 1 << 30;
-    const NINE_GIB: u64 = 9 << 30;
     match memory {
-        Some([budget, used, ..]) if keep && u128::from(used) * 100 < u128::from(budget) * 85 => {
-            if (ONE_GIB..=NINE_GIB).contains(&budget) {
-                SPARE_KEPT_8GB
-            } else {
-                SPARE_KEPT
-            }
-        }
+        Some([budget, used, ..]) if keep && u128::from(used) * 100 < u128::from(budget) * 85 => SPARE_KEPT,
         _ => SPARE,
     }
 }

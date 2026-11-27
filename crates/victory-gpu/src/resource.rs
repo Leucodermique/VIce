@@ -1758,14 +1758,14 @@ pub(crate) fn room(memory: Option<[u64; 4]>) -> bool {
 }
 
 /// Dedicated headroom check for small/detail textures (<= 512 KiB: secondary NPC
-/// faces, eyes, background lights, decals, props). Stays open up to 97% of the
+/// faces, eyes, background lights, decals, props). Stays open up to 95% of the
 /// VRAM budget even after large environment textures pause at `room_percent()`,
-/// so scenes finish loading completely without dropping detail textures.
+/// keeping 8 GB VRAM below WDDM RAM-spillover while letting detail textures load.
 #[cfg(windows)]
 pub(crate) fn room_detail(memory: Option<[u64; 4]>) -> bool {
     match memory {
         Some([budget, used, ..]) => {
-            let detail_pct = room_percent().max(97);
+            let detail_pct = room_percent().max(95);
             used.saturating_sub(crate::pool::texture_room()) + crate::shadow::card_room_kept() + targets_room_kept()
                 < budget / 100 * detail_pct
         }
