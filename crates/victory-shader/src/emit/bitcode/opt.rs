@@ -60,17 +60,14 @@ pub const FIRST: u32 = 32;
 /// the yard's frame replayed turn by turn, dispatches and draws 18.47 -> 18.45
 /// ms (12 loops) and 18.23 -> 18.16 (5 loops): the driver joins the loads.
 pub const WIDE: u32 = 64;
-/// Not a pass either: 32-bit float binary operations carry LLVM fast-math bits
-/// (`VICTORY_SHADER_FAST_BITS`, default 24 = no signed zeros + reciprocal,
-/// keeping NaN and infinity tests intact).
-pub const FAST: u32 = 128;
 /// The passes over the module.
 pub const MODULE: u32 = DEAD | FOLD | REUSE | FACTS | LOADS;
 /// Every pass.
-pub const ALL: u32 = MODULE | FIRST | WIDE | FAST;
-/// The passes that run when nothing says which: every clean-up pass plus
-/// [`FAST`] (with bits 24, preserving NaN/Inf tests), keeping [`WIDE`] off.
-pub const DEFAULT: u32 = (ALL & !WIDE) | FAST;
+pub const ALL: u32 = MODULE | FIRST | WIDE;
+/// The passes that run when nothing says which: every one but [`WIDE`],
+/// which no card has shown a gain for yet (`VICTORY_SHADER_OPT=127` asks
+/// for it).
+pub const DEFAULT: u32 = ALL & !WIDE;
 
 /// What the instructions a module writes use, of the features a shader
 /// declares by flag (the validator's "flags must match usage").

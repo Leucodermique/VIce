@@ -1764,22 +1764,22 @@ impl<'a> Lower<'a> {
         let (g, base, len) = match self.code_table {
             Some(t) => t,
             None => {
-                let addresses: Vec<&crate::resource::Address> = self
+                let first = self
                     .x
                     .res
                     .scalar
                     .iter()
-                    .map(|s| &s.1)
+                    .map(|s| s.1)
                     .chain(self.x.res.descriptors.iter().flat_map(|d| {
                         d.source.leaves().into_iter().filter_map(|l| match l {
-                            Source::Built { address, .. } => Some(address),
+                            Source::Built { address, .. } => Some(*address),
                             _ => None,
                         })
                     }))
                     .filter(|a| a.param == CODE)
-                    .collect();
-                let lowest = addresses.iter().map(|a| a.offset & !3).min().ok_or("a code table")?;
-                let first = code_table_start(self.x.p, &addresses, lowest);
+                    .map(|a| a.offset & !3)
+                    .min()
+                    .ok_or("a code table")?;
                 let code = &self.x.native.code;
                 let words: Vec<u32> = code
                     .get(first as usize..)
@@ -5011,30 +5011,28 @@ impl<'a> Lower<'a> {
         }
         if name == "ds_bpermute_b32" {
             // Backward permute: no LDS is touched. Each lane takes the data
-            // register of the lane its address names, (address + offset) / 4,
-            // within its own 32-lane half: GFX10 permutes the two halves of a
-            // wave of 64 on their own (from Belobug PR #363). So lane l reads
-            // lane (l & 32) | (that & 31): in the same host wave on a 32-lane
-            // host too, where each host wave is one half of the console's.
-            // A source lane outside EXEC gives 0.
+            // register of the lane its address names, (address + offset) / 4
+            // within the wave; a source lane outside EXEC gives 0. (
+            // the title's checkerboard shadow-mask generators read their
+            // neighbours' samples with it; without them every shadowed light
+            // was multiplied by an empty mask.)
             // shortcut: a source lane that is not at this instruction on the
             // host (it left through a branch, not a guard) is read as the
             // host gives it; the console reads 0.
             self.cross_lane(false)?;
+            if self.exchange.as_ref().is_some_and(|e| !e.1) {
+                // a console wave of 64 run as two host waves: the lane named
+                // may be in the other one
+                return Err("a lane permute across two host waves");
+            }
             let at = self.vgprs(inst, addr.as_ref().ok_or("a permute address")?, 1)?[0];
             let x = self.vgprs(inst, data.first().ok_or("a permute source")?, 1)?[0];
             let o = self.s.m.i32(offset);
             let at = self.s.m.bin(c, Bin::Add, at, o);
             let two = self.s.m.i32(2);
             let src = self.s.m.bin(c, Bin::LShr, at, two);
-            let k31 = self.s.m.i32(31);
-            let mut src = self.s.m.bin(c, Bin::And, src, k31);
-            if self.wave() == 64 {
-                let lane = self.lane_index();
-                let k32 = self.s.m.i32(32);
-                let half = self.s.m.bin(c, Bin::And, lane, k32);
-                src = self.s.m.bin(c, Bin::Or, src, half);
-            }
+            let last = self.s.m.i32(self.wave() - 1);
+            let src = self.s.m.bin(c, Bin::And, src, last);
             let x = match guard {
                 Some(g) => {
                     let z = self.s.m.i32(0);
@@ -9570,8 +9568,7 @@ impl<'a> Lower<'a> {
             let t = self.binary(35, a, lo);
             let t = self.binary(36, t, hi);
             let r = self.s.m.cast(c, Cast::FpToSi, t, i32t);
-            // On the bits: `fcmp uno` may be folded under fast-math (`is_nan_f32`).
-            let nan = self.is_nan_f32(a);
+            let nan = self.s.m.cmp(c, pred::UNO, a, a);
             let z = self.s.m.i32(0);
             let r = self.s.m.select(c, nan, z, r);
             return self.write_half(inst, r, guard);
@@ -10374,57 +10371,34 @@ impl<'a> Lower<'a> {
                 } else {
                     (self.fsrc(inst, 0)?, self.fsrc(inst, 1)?)
                 };
-                // Every comparison that a NaN makes true (`u` and the `n`
-                // forms), and `o`, test NaN on the bits (`is_nan_f32`) and
-                // compare ordered otherwise so the driver cannot fold away
-                // the title's own NaN guards (`isnan`) and leak NaNs into
-                // bloom/TAA (causing full-screen flashes on NVIDIA).
-                let ordered = |l: &mut Self, op: &str| -> Option<V> {
+                if op == "lg" {
+                    // Ordered and not equal, false for a NaN, as `olt | ogt`.
+                    // `fcmp one` means the same, but the AMD D3D12 driver
+                    // runs it as unordered (true for a NaN) where NVIDIA
+                    // and WARP do not; olt and ogt agree on all three.
+                    let lt = self.s.m.cmp(c, pred::OLT, a, b);
+                    let gt = self.s.m.cmp(c, pred::OGT, a, b);
+                    self.s.m.bin(c, Bin::Or, lt, gt)
+                } else {
                     let p = match op {
+                        "f" => pred::FALSE,
                         "lt" => pred::OLT,
                         "eq" => pred::OEQ,
                         "le" => pred::OLE,
                         "gt" => pred::OGT,
-                        "lg" => {
-                            // Ordered and not equal, false for a NaN, as `olt | ogt`.
-                            let lt = l.s.m.cmp(c, pred::OLT, a, b);
-                            let gt = l.s.m.cmp(c, pred::OGT, a, b);
-                            return Some(l.s.m.bin(c, Bin::Or, lt, gt));
-                        }
                         "ge" => pred::OGE,
-                        _ => return None,
-                    };
-                    Some(l.s.m.cmp(c, p, a, b))
-                };
-                if let Some(r) = ordered(self, op) {
-                    r
-                } else if matches!(op, "f" | "tru") {
-                    self.s.m.bool(op == "tru")
-                } else {
-                    let (na, nb) = (self.is_nan_f32(a), self.is_nan_f32(b));
-                    let nan = self.s.m.bin(c, Bin::Or, na, nb);
-                    // "not (a op b)": true for a NaN, else the opposite ordered test.
-                    let opposite = match op {
-                        "o" | "u" => None,
-                        "nge" => Some("lt"),
-                        "nlg" => Some("eq"),
-                        "ngt" => Some("le"),
-                        "nle" => Some("gt"),
-                        "neq" => Some("lg"),
-                        "nlt" => Some("ge"),
+                        "o" => pred::ORD,
+                        "u" => pred::UNO,
+                        "nge" => pred::ULT,
+                        "nlg" => pred::UEQ,
+                        "ngt" => pred::ULE,
+                        "nle" => pred::UGT,
+                        "neq" => pred::UNE,
+                        "nlt" => pred::UGE,
+                        "tru" => pred::TRUE,
                         _ => return Err(inst.name()),
                     };
-                    match opposite {
-                        None if op == "u" => nan,
-                        None => {
-                            let yes = self.s.m.bool(true);
-                            self.s.m.bin(c, Bin::Xor, nan, yes)
-                        }
-                        Some(o) => {
-                            let r = ordered(self, o).expect("an ordered comparison");
-                            self.s.m.bin(c, Bin::Or, r, nan)
-                        }
-                    }
+                    self.s.m.cmp(c, p, a, b)
                 }
             }
             "u64" | "i64" => {
@@ -12293,14 +12267,13 @@ impl<'a> Lower<'a> {
         if !nan_scrub() {
             return f;
         }
-        // NaN or an infinity tested strictly on the bits (`(bits & 0x7FFF_FFFF) >= 0x7F80_0000`)
-        // so the driver can never fold the check away under fast-math.
+        // NaN or an infinity (11/26: the whole picture went white at one
+        // angle with only NaN scrubbed: an infinity through bloom or the
+        // exposure does the same). |f| >= inf, unordered: true for NaN too.
         let c = self.cur;
-        let bits = self.as_int(f);
-        let mask = self.s.m.i32(0x7FFF_FFFF);
-        let mag = self.s.m.bin(c, Bin::And, bits, mask);
-        let inf = self.s.m.i32(0x7F80_0000);
-        let bad = self.s.m.cmp(c, pred::IUGE, mag, inf);
+        let a = self.unary(6, f);
+        let inf = self.s.m.f32(0x7f80_0000);
+        let bad = self.s.m.cmp(c, pred::UGE, a, inf);
         let zero = self.s.m.f32(0);
         self.s.m.select(c, bad, zero, f)
     }
@@ -12960,62 +12933,15 @@ fn interp_mode(kind: Barycentric) -> Option<u8> {
     })
 }
 
-/// Where a program's constant table starts in its code: where its
-/// instructions end, unless a load at a fixed offset reads below that (then
-/// at `lowest`, the lowest offset any load or descriptor names). The
-/// program's constants follow its instructions, and a load at a computed
-/// offset reads them, not instruction bytes.
-fn code_table_start(
-    p: &crate::ir::Program,
-    addresses: &[&crate::resource::Address],
-    lowest: u32,
-) -> u32 {
-    let code_end = p
-        .blocks
-        .iter()
-        .flat_map(|b| &b.insts)
-        .map(|i| i.machine.offset + 4 * i.machine.words.len())
-        .max()
-        .unwrap_or(0) as u32;
-    let fixed_below = addresses
-        .iter()
-        .any(|a| a.dynamic.is_none() && a.offset < code_end);
-    if fixed_below {
-        lowest
-    } else {
-        lowest.max(code_end & !3)
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{Lowered, Numeric, Parts, buffer_format, code_table_start, half_shift, lower};
+    use super::{Lowered, Numeric, Parts, buffer_format, half_shift, lower};
     use crate::native::{
         ComputeIo, HwStage, NativeProgram, ResourceType, RootParam, RootType, StageIo, UsedResource,
     };
     use crate::{io, ir, resource, structure};
 
     const S_ENDPGM: u32 = 0xBF81_0000;
-
-    /// A program's constant table starts after its instructions, unless a
-    /// load at a fixed offset reads below that.
-    #[test]
-    fn the_code_table_starts_after_the_instructions() {
-        let mut words = vec![0xBF80_0000, S_ENDPGM];
-        words.extend(0..1000u32);
-        let code: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
-        let p = ir::build(&code, false, 256).unwrap();
-        let at = |offset: u32, dynamic: bool| resource::Address {
-            param: resource::CODE,
-            offset,
-            dynamic: dynamic.then_some(ir::Value(0)),
-        };
-        let (computed, fixed_after, fixed_inside) = (at(0, true), at(12, false), at(4, false));
-        assert_eq!(code_table_start(&p, &[&computed], 0), 8);
-        assert_eq!(code_table_start(&p, &[&computed, &fixed_after], 0), 8);
-        assert_eq!(code_table_start(&p, &[&computed, &fixed_inside], 0), 0);
-        assert_eq!(code_table_start(&p, &[&fixed_after], 12), 12);
-    }
 
     #[test]
     fn packed_pixel_inputs_find_their_second_row() {

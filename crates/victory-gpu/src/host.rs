@@ -8530,16 +8530,12 @@ impl Host {
         };
         let mut buffer: Option<ID3D12Resource> = None;
         let mut data = std::ptr::null_mut();
-        // SAFETY: plain creation and mapping of a CPU-side upload buffer.
-        // Upload heaps live in system RAM and are only referenced by lists
-        // submitted after creation, never by bindless texture descriptor heaps;
-        // skipping CREATE_NOT_RESIDENT + synchronous MakeResident eliminates
-        // 17+ seconds of blocking stalls (up to 1.4s spikes) on 8 GB laptops.
+        // SAFETY: plain creation and mapping of an upload buffer.
         let made = unsafe {
             self.device
                 .CreateCommittedResource(
                     &heap,
-                    D3D12_HEAP_FLAG_NONE,
+                    not_resident(),
                     &desc,
                     D3D12_RESOURCE_STATE_GENERIC_READ,
                     None,
@@ -8547,6 +8543,7 @@ impl Host {
                 )
                 .and_then(|()| {
                     let b = buffer.as_ref().ok_or_else(windows::core::Error::empty)?;
+                    resident(&self.device, b)?;
                     b.Map(0, None, Some(&mut data))
                 })
         };
