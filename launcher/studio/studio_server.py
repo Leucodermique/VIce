@@ -719,11 +719,17 @@ def launch_game(cfg, developer):
     env["VICTORY_LAND_THREADS"] = "10"
     env["VICTORY_LAND_SKIP"] = "1"
 
-    # VRAM & 16 GB RAM WDDM shared-memory safety budget.
+    # VRAM & 16 GB RAM budget:
+    # - VICTORY_WINDOWS_BAR_MB=0: do NOT place 1.28 GB of window buffers into 8 GB VRAM BAR
+    #   (reclaims +1,280 MB of pure VRAM so textures + DLSS + FG stay ~5.7-6.2 GB / 7.18 GB!).
+    # - VICTORY_WINDOW_KB=1024 + VICTORY_WINDOW_TAILS=1: cuts 3.3 GB of 4 MiB sparse windows
+    #   down to ~1.6 GB in 16 GB system RAM (prevents Windows pagefile thrashing).
     env["VICTORY_CARD_BUFFERS_MIN_MB"] = "1"
     env["VICTORY_CARD_BUFFERS_MB"] = "640" if dlss_wanted else "768"
     env["VICTORY_CARD_ROOM_FOR_TARGETS_MB"] = "1024"
-    env["VICTORY_WINDOWS_BAR_MB"] = "1280"
+    env["VICTORY_WINDOWS_BAR_MB"] = "0"
+    env["VICTORY_WINDOW_KB"] = "1024"
+    env["VICTORY_WINDOW_TAILS"] = "1"
 
     # Lighting & reflections without RT (violet probe filter + specular stand-in + anti-HDR/fog flash).
     # Note: do NOT set VICTORY_AMBIENT_ONCE=1 with level=0.55 (it halved indoor brightness into pitch black).
