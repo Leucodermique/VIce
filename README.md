@@ -1,22 +1,37 @@
 <p align="center">
-  <img src="launcher/studio/studio-emblem.png" alt="VIce Studio" width="190" />
+  <img src="launcher/studio/vice-github-banner.svg" alt="VIce · Laptop & Low-VRAM Edition" width="880" />
 </p>
 
 <h1 align="center">VIce · VIce Studio</h1>
 
 <p align="center">
-  <strong>Xbox Series X|S → Windows 11 Native Compatibility Layer (Rust / Direct3D 12) &amp; VIce Studio Launcher</strong>
+  <strong>Xbox Series X|S → Windows 11 Native Compatibility Layer (Rust / Direct3D 12) &amp; VIce Studio Launcher</strong><br/>
+  <em>Exclusively engineered for laptops and modest / low-VRAM GPUs (8 GB VRAM · 16 GB RAM)</em>
 </p>
 
 <p align="center">
-  <em>AI-managed consolidated build fed continuously from community commits across the VIctory ecosystem.</em>
+  <img src="https://img.shields.io/badge/Focus-Laptops%20%26%20Low--VRAM%20ONLY-a855f7?style=for-the-badge" alt="Focus: Laptops & Low-VRAM ONLY" />
+  <img src="https://img.shields.io/badge/Target-8%20GB%20VRAM%20%C2%B7%2016%20GB%20RAM-f04ec4?style=for-the-badge" alt="8 GB VRAM · 16 GB RAM" />
+  <img src="https://img.shields.io/badge/Rendering-Clean%20Native%20%2B%20Smooth%20Motion-ff9f6e?style=for-the-badge" alt="Clean Native + Smooth Motion" />
+  <img src="https://img.shields.io/badge/License-GPL--3.0--or--later-6ee7b7?style=for-the-badge" alt="GPL-3.0-or-later" />
 </p>
+
+---
+
+> [!IMPORTANT]
+> ### 🎯 Strict Project Focus: Laptops & Low-VRAM / Low-Graphic Configs ONLY
+> **VIce is specifically and exclusively built for gaming laptops and modest / low-VRAM PCs (8 GB VRAM GPUs, 16 GB system RAM).**
+>
+> Our goal is **NOT** to chase heavy 32 GB RAM / 16 GB+ VRAM desktop experiments, raw unoptimized ray tracing, or blurry AI upscaling artifacts. Every single change integrated into **VIce** must pass three strict rules:
+> 1. **Minimal VRAM & RAM footprint** — zero 32 GB desktop pools, zero `out of VRAM` thrashing, smart `>= 2K` environment mip-cap while keeping **100% native mip 0 sharpness on faces, eyes, weapons, and HUD**.
+> 2. **Cleanest & sharpest native image** — tuned for **NVIDIA Smooth Motion** (`victory_sm.exe`) + lightweight CAS sharpening, with zero AI contouring/smearing, zero purple probe blotches, zero HDR/fog flashes.
+> 3. **Smoothest possible gameplay & loading** — surgical, lightweight CPU/GPU wins only (helper P-core priority, zero remap stalls, Bink intro skip, heavy/broken shader culling, responsive PC controls & `1280×128` PC prompt icons).
 
 ---
 
 ## Overview
 
-**VIce** is a consolidated distribution and dedicated desktop launcher (**VIce Studio v4**) built on top of the open-source **[VIctory](https://github.com/Marvisak/VIctory)** compatibility layer, focused on running Xbox Series X|S titles natively on Windows 11 — with extensive real-hardware tuning and validation on **NVIDIA GeForce RTX 4070 Laptop (8 GB VRAM, 32-lane warps) / 16 GB RAM**.
+**VIce** is a lightweight, laptop-focused distribution and dedicated desktop launcher (**VIce Studio v4**) built on top of the open-source **[VIctory](https://github.com/Marvisak/VIctory)** compatibility layer, dedicated to running Xbox Series X|S titles natively on Windows 11 with maximum smoothness and visual cleanliness on **8 GB VRAM laptops & 16 GB RAM** (validated daily on **NVIDIA GeForce RTX 4070 Laptop 8 GB / Intel Core i7-13700HX / 16 GB RAM**).
 
 > **Legal Notice:** This repository contains **no game files, binaries, code, or proprietary assets**. You must supply your own legitimately obtained files at runtime. Licensed under **GPL-3.0-or-later** in full compliance with upstream [VIctory](https://github.com/Marvisak/VIctory). It is not affiliated with or endorsed by any game developer or publisher.
 
@@ -24,39 +39,37 @@
 
 ## AI Governance & Model Attribution
 
-This repository is actively maintained, integrated, tested, and published through an **AI-driven engineering workflow**, combining our own work with community-contributed AI-assisted fixes from upstream forks:
+This repository is actively maintained, integrated, tested, and published through an **AI-driven engineering workflow**, combining our own laptop/low-VRAM optimizations with carefully vetted surgical fixes from upstream forks:
 
 | Area | AI Model / Agent | Scope of Work |
 |---|---|---|
-| **VIce Project Maintenance & Integration** | **Antigravity (Google DeepMind / Gemini)** | Continuous multi-fork curation and cherry-picking across `Marvisak/VIctory`, `fxceless/victory-fork`, and `LooperSalty/victory`; merge-conflict resolution; automated unit-test & `--release` validation; repository & GitHub release management. |
-| **NVIDIA RTX 8 GB Debugging & Shader Fixes** | **Antigravity (Google DeepMind / Gemini)** | Live `play.log` telemetry analysis, anti-TDR loop bounds (`LOOP_LIMIT = 16384`), DXIL disassembly & `descriptor_data()` fixes unlocking `PS_PuddleDetect` and `ShallowWaterSim`, and `XboxBvhBuilder.dll` wave-32 validation testing. |
-| **VIce Studio v4 Launcher & Branding** | **Antigravity (Google DeepMind / Gemini)** | End-to-end backend (`studio_server.py`) & frontend (`studio.html`) architecture, Win32 game-window state detection, zero-blocking in-memory telemetry, automatic token refresh, password-protected developer mode, cinematic startup intro, and the generated **VIce Studio** neon emblem (`studio-emblem.png`). |
-| **Upstream GPU / Shader Architecture** | **Claude (Anthropic — Claude Code / Opus / Fable)** | Co-author of core upstream & `fxceless/victory-fork` breakthroughs integrated here: async `VICTORY_RELAY` / `VICTORY_LATE_WAIT`, GPU-side card-buffer comparison, Depth Bounds Test (`#82`), pre-bake bindless texture uploads, helper-lane `v_readfirstlane` fix (`#1733`), and shader cleanup passes. |
-| **Upstream D3D12 Fixes** | **Gemini (Google)** | Co-author of upstream D3D12 device fixes integrated here (including real `GetDeviceRemovedReason` `#928`). |
+| **VIce Project Maintenance & Low-VRAM Curation** | **Antigravity (Google DeepMind / Gemini)** | Strict surgical curation for 8 GB VRAM / 16 GB RAM laptops across `Marvisak/VIctory`, `fxceless/victory-fork`, `VIctory-NVIDIA`, `VItoriaBr`, and `LooperSalty/victory`; regression filtering (rejecting 32 GB desktop bloat); automated unit-test & build validation. |
+| **8 GB VRAM, Lighting & Input Engineering** | **Antigravity (Google DeepMind / Gemini)** | Smart `VICTORY_TEXTURE_DROP_MIPS=1` (`>= 2K` environment cap, 100% native faces/HUD), 3D Texture UAV mirroring (`VItoriaBr #72`), `VICTORY_SYNC_NULL_SKIP`, HDR & peach-fog anti-flash clamps, `1280×128` 8×-supersampled PC prompt icons (`compose.rs`), AZERTY/QWERTY + 360° mouse + `InputLatch`. |
+| **VIce Studio v4 Launcher & Branding** | **Antigravity (Google DeepMind / Gemini)** | Clean 3-option AAA launcher (`studio_server.py` & `studio.html`), dual-exe Smooth Motion switcher (`victory.exe` / `victory_sm.exe`), Win32 live window tracking, password-protected developer diagnostics, and the **VIce** neon SVG logo & GitHub banner. |
+| **Upstream GPU / Shader Architecture** | **Claude (Anthropic — Claude Code / Opus / Fable)** | Co-author of core upstream & community breakthroughs selectively ported here: async `VICTORY_RELAY` / `VICTORY_CARD_STEPS`, GPU-side buffer comparison, `VICTORY_HELPER_PRIORITY`, violet probe filter, Bink intro skip, and Wave32 shader lowering. |
+| **Upstream D3D12 Fixes** | **Gemini (Google)** | Co-author of upstream D3D12 device & validation fixes integrated here. |
 
-### Automatically Fed Community Sources
+### Curated Community Sources
 
-VIce tracks and integrates verified advancements from:
-1. **[Marvisak/VIctory](https://github.com/Marvisak/VIctory)** — upstream foundation (PE/XEX loader, HLE runtime services, D3D12 backend, RDNA2→DXIL shader recompiler; **106+ recent PRs** integrated).
-2. **[fxceless/victory-fork](https://github.com/fxceless/victory-fork)** — NVIDIA RTX rendering fixes, VRAM deduplication, Depth Bounds Test (`#82`), pre-bake texture uploads, Geometry Shaders (`#381`), AVX2 relay merge (`#384`), and skin/wall race fixes (`#191`, `#206`).
-3. **[LooperSalty/victory](https://github.com/LooperSalty/victory)** — dedicated D3D12 `COPY` queue, DirectStorage physical-page GPU notifications (`VICTORY_DSTORAGE_NOTIFY=1`), BCPack BC7 fix, MIMG fixes, `late waits` in-place placement guards, and `xg_xs.dll` local oracle support.
-4. **[XCL](https://github.com/ivall/xcl)** (GPL-2.0-only) — referenced by upstream authors for console behavior verification.
+VIce selectively ports **only lightweight, zero-bloat improvements** suitable for laptops & modest GPUs from:
+1. **[Marvisak/VIctory](https://github.com/Marvisak/VIctory)** — upstream foundation (PE/XEX loader, HLE runtime, D3D12 backend, RDNA2→DXIL shader recompiler).
+2. **[VIctory-NVIDIA](https://github.com/trustno1-coder/VIctory-NVIDIA)** — NVIDIA Wave32 base, Smooth Motion pairing, `VICTORY_HELPER_PRIORITY`, violet probe filter (`#29`), Bink intro skip (`#26`), and heavy/broken shader culling.
+3. **[fxceless/victory-fork](https://github.com/fxceless/victory-fork)** — NVIDIA RTX rendering fixes, VRAM deduplication, dynamic slot heap identity (`#1324`), pipeline unwind safety (`#1353`), and queue fixes (`#1320`).
+4. **[VItoriaBr](https://github.com/VItoriaBr)** & **[LooperSalty/victory](https://github.com/LooperSalty/victory)** — placed 3D Texture UAV mirroring (`#72`), BCPack BC7 fixes, and MIMG/memory safety fixes.
+5. **[XCL](https://github.com/ivall/xcl)** (GPL-2.0-only) — referenced by upstream authors for console behavior verification.
 
 ---
 
-## Detailed Progress & Milestones
+## Current Status (2026-11-27 — Validated on RTX 4070 Laptop 8 GB VRAM / 16 GB RAM)
 
-### Current Status (2026-11-25 — Tested on Windows 11, RTX 4070 Laptop 8 GB, 16 GB RAM, Series X Profile)
-
-| Stage | Current State |
+| Area | Current State |
 |---|---|
-| **Boot, first-boot setup & menus** | Working cleanly at **30 fps** (zero intro video flicker). |
-| **Opening cutscene** | Plays start-to-finish, lit and in order (title cards, credits, night/dusk exterior shots). |
-| **Saves & checkpoints** | Autosave checkpoint creation and reload working. |
-| **First playable scene (prison cell & yard)** | Renders correctly with walls, ceiling, character skin/hair, sunlit exterior, HUD, pause menu, and pad/keyboard input. |
-| **Shader coverage (NVIDIA 32-lane)** | **25,948 / 25,953 shaders translated (99.98%)** via `fxceless` PRs `#854` + `#993` + `#1006` + `#501` (**100% Pixel Shaders, 100% Vertex Shaders, 195 Geometry Shaders**, paired wave64 on 32-lane NVIDIA, mesh >32 KiB linking, and `f5e50eb2108c425b` integer-RT fix). |
-| **Ray Tracing (BVH Builder)** | **Live ray-tracing structure builder (`VICTORY_BVH_BUILDER=1`, PR `#994`)** runs all 52 `XboxBvhBuilder.dll` shaders cleanly without crashing, lighting indirect/shaded interiors and faces (toggleable in VIce Studio settings). |
-| **VRAM & In-world frame rate** | **Levels on demand (`VICTORY_LEVELS_ON_DEMAND=1`)** saves **~3.1 GB VRAM** on RTX 4070 8 GB; full `fxceless/main` (`3973179`) speed stack (`ASYNC_SUBMIT`, `QUEUE2`, `INDIRECT_WINDOW` + anti-TDR `DRIVER_WATCH`, `COPY_PLAIN`, `JOIN_PARTS`, `BACK_OWN_VIEW`) reaches **7–9.6 fps** in the first rooms (**10–12 fps** in lighter views). |
+| **Target Hardware** | **Laptops & low-VRAM / modest GPUs ONLY** (8 GB VRAM, 16 GB RAM, Windows 11). |
+| **Frame Rate & Smoothness** | **14–16+ FPS native → ~30+ FPS with NVIDIA Smooth Motion** (`victory_sm.exe`), `VICTORY_HELPER_PRIORITY=1`, `VICTORY_TEXTURE_NO_WAIT=1` (`0.0 ms` remap stalls), plus `-5.6..15 ms/frame` saved by culling decal-heap defrag, smeared heat-haze, and broken Wave64 water shaders. |
+| **VRAM & Texture Sharpness** | Smart `VICTORY_TEXTURE_DROP_MIPS=1` cuts `>= 2K` environment textures by 4× while keeping **100% native mip 0 on all faces, eyes, skin, weapons, and HUD** (`<= 1024 px`). Zero DLSS AI contouring/smearing. |
+| **Lighting & Visuals** | Balanced ambient (`0.42`) with **violet/magenta probe filter (`#29`)**, **HDR anti-flash clamp**, **peach volumetric fog cap (`AIR=0.06`)**, and **3D Texture UAV mirroring (`VItoriaBr #72`)**. |
+| **Controls & PC UI** | Full **AZERTY (`ZQSD`) / QWERTY** + **360° mouse look (`F8`)** + **`InputLatch`** (zero missed clicks on slow frames) + **1280×128 8×-supersampled PC prompt icons** (smooth native fade, drop shadow, hold rings, auto-reverts when a real pad is plugged in). |
+| **Fast Startup & Launcher** | **`VICTORY_SKIP_BINK=1`** skips intro movies by default; **VIce Studio v4** exposes just **3 clean controls** (`Resolution`, `Smooth Motion`, `Ray Tracing`) + hidden Dev Diagnostics tab. |
 
 ### 1. Rendering, Shaders & Ray Tracing (`fxceless 3973179` + PRs `#854`, `#993`, `#994`, `#1006`, `#501`, `#632`, `#684`, `#238`)
 - **99.98% Shader Translation on NVIDIA 32-lane GPUs (`#854` + `#993`)**: paired wave64 execution on 32-lane hosts, mesh-to-pixel linking for >32 KiB mesh outputs (71 pedestrian/vehicle/prop mesh shaders), native **Geometry Shaders (195 programs)**, console-accurate loops, dispatches past 65,535 groups in X, and **100% of Pixel & Vertex shaders** passing (`12,067/12,067` PS, `2,192/2,192` VS).

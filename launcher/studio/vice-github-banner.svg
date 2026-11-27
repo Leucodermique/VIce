@@ -1,0 +1,113 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 280" width="960" height="280">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0b0615"/>
+      <stop offset="48%" stop-color="#1d0b36"/>
+      <stop offset="82%" stop-color="#2c1042"/>
+      <stop offset="100%" stop-color="#140822"/>
+    </linearGradient>
+    <radialGradient id="sunGlow" cx="50%" cy="56%" r="48%">
+      <stop offset="0%" stop-color="#ff9b6a" stop-opacity=".34"/>
+      <stop offset="36%" stop-color="#f04ec4" stop-opacity=".22"/>
+      <stop offset="68%" stop-color="#8b5cf6" stop-opacity=".12"/>
+      <stop offset="100%" stop-color="#8b5cf6" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="horizonLine" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#8b5cf6" stop-opacity="0"/>
+      <stop offset="28%" stop-color="#a855f7" stop-opacity=".85"/>
+      <stop offset="52%" stop-color="#f24ab8" stop-opacity=".95"/>
+      <stop offset="76%" stop-color="#ffaa70" stop-opacity=".85"/>
+      <stop offset="100%" stop-color="#ffaa70" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="viGrad" x1="8%" y1="0%" x2="92%" y2="100%">
+      <stop offset="0%" stop-color="#8b5cf6"/>
+      <stop offset="46%" stop-color="#c048f5"/>
+      <stop offset="78%" stop-color="#f24ab8"/>
+      <stop offset="100%" stop-color="#ffaa70"/>
+    </linearGradient>
+    <linearGradient id="viStroke" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity=".96"/>
+      <stop offset="55%" stop-color="#f5c6ff" stop-opacity=".86"/>
+      <stop offset="100%" stop-color="#ffd5b8" stop-opacity=".92"/>
+    </linearGradient>
+    <linearGradient id="swooshGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#a855f7"/>
+      <stop offset="55%" stop-color="#ff5ec4"/>
+      <stop offset="100%" stop-color="#ffad78"/>
+    </linearGradient>
+    <linearGradient id="borderGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#a855f7" stop-opacity=".55"/>
+      <stop offset="50%" stop-color="#f04ec4" stop-opacity=".40"/>
+      <stop offset="100%" stop-color="#ffaa70" stop-opacity=".50"/>
+    </linearGradient>
+    <filter id="viShadow" x="-22%" y="-28%" width="148%" height="164%">
+      <feDropShadow dx="0" dy="6" stdDeviation="6" flood-color="#090312" flood-opacity=".88"/>
+      <feDropShadow dx="0" dy="0" stdDeviation="10" flood-color="#b648ff" flood-opacity=".46"/>
+    </filter>
+    <filter id="ceGlow" x="-25%" y="-25%" width="150%" height="150%">
+      <feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="#0b0416" flood-opacity=".85"/>
+      <feDropShadow dx="0" dy="0" stdDeviation="6" flood-color="#ffffff" flood-opacity=".35"/>
+    </filter>
+    <clipPath id="cardClip">
+      <rect x="2" y="2" width="956" height="276" rx="22"/>
+    </clipPath>
+  </defs>
+
+  <!-- Rounded Vice City card -->
+  <g clip-path="url(#cardClip)">
+    <rect x="0" y="0" width="960" height="280" fill="url(#bgGrad)"/>
+    <rect x="0" y="0" width="960" height="280" fill="url(#sunGlow)"/>
+
+    <!-- Subtle decorative grid / light beams -->
+    <g opacity=".12" stroke="#f0abfc" stroke-width="1">
+      <line x1="0" y1="215" x2="960" y2="215"/>
+      <line x1="0" y1="238" x2="960" y2="238"/>
+      <line x1="0" y1="262" x2="960" y2="262"/>
+    </g>
+
+    <!-- Stylized Vice City skyline / palm accents on sides -->
+    <g fill="#0c0518" opacity=".68">
+      <!-- Left palm silhouette -->
+      <path d="M74 280 C78 228 84 176 96 130 C92 178 88 228 86 280 Z"/>
+      <path d="M95 132 C66 112 34 118 14 136 C42 128 68 128 94 138 Z"/>
+      <path d="M95 132 C72 96 42 84 18 90 C48 96 72 110 94 134 Z"/>
+      <path d="M96 132 C106 94 134 78 164 82 C136 92 112 110 97 135 Z"/>
+      <path d="M96 132 C126 114 156 122 178 144 C150 132 122 130 96 138 Z"/>
+      <!-- Right palm silhouette -->
+      <path d="M886 280 C882 228 876 176 864 130 C868 178 872 228 874 280 Z"/>
+      <path d="M865 132 C894 112 926 118 946 136 C918 128 892 128 866 138 Z"/>
+      <path d="M865 132 C888 96 918 84 942 90 C912 96 888 110 866 134 Z"/>
+      <path d="M864 132 C854 94 826 78 796 82 C824 92 848 110 863 135 Z"/>
+      <path d="M864 132 C834 114 804 122 782 144 C810 132 838 130 864 138 Z"/>
+    </g>
+
+    <!-- Main VIce Logo (centered, crisp scale) -->
+    <g transform="translate(274 24) scale(0.74)">
+      <g filter="url(#viShadow)" transform="translate(12 8)">
+        <path d="M4 13H63L108 132L154 13H214L136 190H79Z M231 13H309V43H290V160H309V190H231V160H250V43H231Z" fill="#1e0c36" stroke="#1e0c36" stroke-width="8" stroke-linejoin="round" transform="translate(4 6)"/>
+        <path d="M4 13H63L108 132L154 13H214L136 190H79Z M231 13H309V43H290V160H309V190H231V160H250V43H231Z" fill="url(#viGrad)" stroke="url(#viStroke)" stroke-width="2.6" stroke-linejoin="round"/>
+      </g>
+      <g filter="url(#ceGlow)">
+        <g transform="translate(320 29)" fill="none" stroke="#ffffff" stroke-width="15.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M94 39C98 18 76 17 54 33C31 50 12 78 12 99C12 124 40 133 66 114L87 95"/>
+          <path d="M111 83C141 78 170 61 176 44C184 23 163 20 145 35C123 53 104 80 101 98C97 119 112 130 133 120C151 111 170 97 182 84"/>
+        </g>
+        <path d="M333 178Q412 150 510 165" fill="none" stroke="url(#swooshGrad)" stroke-width="6.5" stroke-linecap="round"/>
+      </g>
+    </g>
+
+    <!-- Horizon neon divider -->
+    <rect x="190" y="196" width="580" height="2" rx="1" fill="url(#horizonLine)"/>
+
+    <!-- Focus tagline -->
+    <text x="480" y="226" text-anchor="middle" fill="#f8f2ff" font-family="Segoe UI, Inter, system-ui, sans-serif" font-size="15.5" font-weight="700" letter-spacing="3.2">
+      LAPTOP &amp; LOW-VRAM EDITION · 8 GB VRAM · 16 GB RAM
+    </text>
+    <text x="480" y="250" text-anchor="middle" fill="#d8b4fe" font-family="Segoe UI, Inter, system-ui, sans-serif" font-size="12" font-weight="600" letter-spacing="2.2" opacity=".9">
+      CLEAN NATIVE RENDERING · SMOOTH MOTION READY · ZERO DESKTOP BLOAT
+    </text>
+  </g>
+
+  <!-- Crisp outer border -->
+  <rect x="2" y="2" width="956" height="276" rx="22" fill="none" stroke="url(#borderGrad)" stroke-width="1.6"/>
+</svg>
