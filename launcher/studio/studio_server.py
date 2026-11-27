@@ -260,17 +260,17 @@ def _sync_smooth_motion_exe(src: Path) -> Path:
 
 
 def resolve_engine(version, smooth_motion=True):
-    diag_exe = ENGINE / "target" / "diag" / "victory.exe"
     release_exe = ENGINE / "target" / "release" / "victory.exe"
+    diag_exe = ENGINE / "target" / "diag" / "victory.exe"
     debug_exe = ENGINE / "target" / "debug" / "victory.exe"
     pick = lambda p: _sync_smooth_motion_exe(p) if smooth_motion else p
     if not version or version == "victory.exe":
-        # VIctory-NVIDIA needs the diag build (release + Thin LTO + diagnostics) so
-        # VICTORY_SKIP_PIPELINES (scripts/rt_off_hashes.txt) is active.
-        if diag_exe.is_file():
-            return pick(diag_exe)
+        # Pure --release build (VICTORY_SKIP_PIPELINES is enabled in release):
+        # zero diagnostics/copystat/book CPU & RAM overhead for maximum FPS on laptops.
         if release_exe.is_file():
             return pick(release_exe)
+        if diag_exe.is_file():
+            return pick(diag_exe)
         return debug_exe
     if version == "victory-diag.exe":
         return pick(diag_exe) if diag_exe.is_file() else diag_exe
@@ -313,15 +313,15 @@ def file_meta(path, alias=None):
 
 
 def list_versions():
-    diag_exe = ENGINE / "target" / "diag" / "victory.exe"
     release_exe = ENGINE / "target" / "release" / "victory.exe"
+    diag_exe = ENGINE / "target" / "diag" / "victory.exe"
     debug_exe = ENGINE / "target" / "debug" / "victory.exe"
-    primary = diag_exe if diag_exe.is_file() else (release_exe if release_exe.is_file() else debug_exe)
+    primary = release_exe if release_exe.is_file() else (diag_exe if diag_exe.is_file() else debug_exe)
     items = []
     if primary.is_file():
         items.append(file_meta(primary, alias="victory.exe"))
-    if release_exe.is_file() and primary != release_exe:
-        items.append(file_meta(release_exe, alias="victory-release.exe"))
+    if diag_exe.is_file() and primary != diag_exe:
+        items.append(file_meta(diag_exe, alias="victory-diag.exe"))
     if debug_exe.is_file() and primary != debug_exe:
         items.append(file_meta(debug_exe, alias="victory-debug.exe"))
     vdir = ENGINE / "launcher" / "versions"
@@ -600,15 +600,13 @@ def launch_game(cfg, developer):
     bvh_builder = bool(cfg.get("bvhBuilder", False))
 
     if fast_gpu:
-        # RTX 4070 Laptop 8 GB VRAM / 16 GB RAM — High-FPS (14-16+ native / ~30 Smooth Motion), Sharp 720p & Clean Visuals:
-        # - VICTORY_RELAY=2 + VICTORY_CARD_STEPS=2 + CARD_BUFFERS_MB=1024: cuts GPU wait from 81 ms -> 0 ms
-        #   and keeps all >=1 MiB buffer compares on GPU (14-16+ native FPS).
-        # - VICTORY_TEXTURE_ROOM_PERCENT=95 + CARD_ROOM_FOR_TARGETS_MB=1280 + HEAP_RECHECK_EVERY=60:
-        #   keeps VRAM streaming open and rechecks late-arriving skin/face textures (eliminates black faces).
-        # - VICTORY_WINDOWS_BAR_MB=2048 + AWAY_MS=3000: prevents 0x8007000E shared-RAM OOM on 16 GB PCs.
-        # - VICTORY_AMBIENT=0.45 / AIR=0.55 / MOST=1.35: lights dark rooms cleanly while cutting the sunset
-        #   orange veil that washed out Lucia's hair/face near the prison window.
-        # - Series S 720p -> 1080p (VICTORY_RENDER_SCALE=0.667) + VICTORY_OWN_UPSCALER=1 + VICTORY_COMPOSE=1.
+        # VIce Laptop / Low-VRAM Profile (8 GB VRAM / 16 GB RAM, Native + Smooth Motion):
+        # - VICTORY_WINDOWS_BAR_MB=0 + WINDOW_KB=1024 + WINDOW_TAILS=1: frees +2 GB VRAM (stops
+        #   PCIe VRAM thrashing at 7.1/7.0 GB) while shrinking shared RAM windows by ~1.7 GB.
+        # - VICTORY_PORT_CONSTANTS=1: keeps the 174 MB 32-bit graphics heap in place (zero copy/hash).
+        # - VICTORY_WC_NO_BACK=1: skips ~16 ms/frame write-combined copy-back & GPU compares.
+        # - VICTORY_EARLY_DEPTH=1: fixes glass-behind-hair depth/motion-vector bleed + cuts overdraw.
+        # - VICTORY_SHARPEN=0.18: crisp native detail without amplifying dithered hair grain.
         env["VICTORY_TEXTURE_NO_WAIT"] = "1"
         env["VICTORY_RELAY"] = "2"
         env["VICTORY_CARD_STEPS"] = "2"
@@ -641,23 +639,28 @@ def launch_game(cfg, developer):
         env["VICTORY_OWN_UPSCALER"] = "1"
         env["VICTORY_BVH_MISS"] = "0" if bvh_builder else "1"
         env["VICTORY_CARD_BUFFERS_MIN_MB"] = "1"
-        env["VICTORY_CARD_BUFFERS_MB"] = "896"
+        env["VICTORY_CARD_BUFFERS_MB"] = "768"
         env["VICTORY_CARD_ROOM_FOR_TARGETS_MB"] = "1024"
-        env["VICTORY_TEXTURE_ROOM_PERCENT"] = "97"
+        env["VICTORY_TEXTURE_ROOM_PERCENT"] = "94"
         env["VICTORY_TEXTURE_DROP_MIPS"] = "1"
-        env["VICTORY_TEXTURE_STAGE_MB"] = "256"
+        env["VICTORY_TEXTURE_STAGE_MB"] = "192"
         env["VICTORY_TEXTURE_CATCHUP"] = "1"
         env["VICTORY_TEXTURE_AWAY_MS"] = "8000"
         env["VICTORY_EARLY_TEXTURES_MS"] = "16"
         env["VICTORY_BAKE_TEXTURES_MS"] = "2500"
         env["VICTORY_HEAP_RECHECK_EVERY"] = "30"
         env["VICTORY_COMPOSE"] = "1"
-        env["VICTORY_SHARPEN"] = "0.35"
+        env["VICTORY_SHARPEN"] = "0.18"
         env["VICTORY_PC_PROMPTS"] = "1"
-        env["VICTORY_WINDOWS_BAR_MB"] = "2048"
+        env["VICTORY_WINDOWS_BAR_MB"] = "0"
+        env["VICTORY_WINDOW_KB"] = "1024"
+        env["VICTORY_WINDOW_TAILS"] = "1"
+        env["VICTORY_WC_NO_BACK"] = "1"
+        env["VICTORY_PORT_CONSTANTS"] = "1"
+        env["VICTORY_EARLY_DEPTH"] = "1"
         env["VICTORY_NO_WATCHDOG"] = "1"
     else:
-        # Conservative Quality mode (RELAY=1, CARD_STEPS=0: slower ~7-10 FPS, zero mesh jitter)
+        # Conservative Quality mode (RELAY=1, CARD_STEPS=0)
         env["VICTORY_TEXTURE_NO_WAIT"] = "1"
         env["VICTORY_RELAY"] = "1"
         env["VICTORY_CARD_STEPS"] = "0"
@@ -690,20 +693,25 @@ def launch_game(cfg, developer):
         env["VICTORY_OWN_UPSCALER"] = "1"
         env["VICTORY_BVH_MISS"] = "0" if bvh_builder else "1"
         env["VICTORY_CARD_BUFFERS_MIN_MB"] = "1"
-        env["VICTORY_CARD_BUFFERS_MB"] = "896"
+        env["VICTORY_CARD_BUFFERS_MB"] = "768"
         env["VICTORY_CARD_ROOM_FOR_TARGETS_MB"] = "1024"
-        env["VICTORY_TEXTURE_ROOM_PERCENT"] = "97"
+        env["VICTORY_TEXTURE_ROOM_PERCENT"] = "94"
         env["VICTORY_TEXTURE_DROP_MIPS"] = "1"
-        env["VICTORY_TEXTURE_STAGE_MB"] = "256"
+        env["VICTORY_TEXTURE_STAGE_MB"] = "192"
         env["VICTORY_TEXTURE_CATCHUP"] = "1"
         env["VICTORY_TEXTURE_AWAY_MS"] = "8000"
         env["VICTORY_EARLY_TEXTURES_MS"] = "16"
         env["VICTORY_BAKE_TEXTURES_MS"] = "2500"
         env["VICTORY_HEAP_RECHECK_EVERY"] = "30"
         env["VICTORY_COMPOSE"] = "1"
-        env["VICTORY_SHARPEN"] = "0.35"
+        env["VICTORY_SHARPEN"] = "0.18"
         env["VICTORY_PC_PROMPTS"] = "1"
-        env["VICTORY_WINDOWS_BAR_MB"] = "2048"
+        env["VICTORY_WINDOWS_BAR_MB"] = "0"
+        env["VICTORY_WINDOW_KB"] = "1024"
+        env["VICTORY_WINDOW_TAILS"] = "1"
+        env["VICTORY_WC_NO_BACK"] = "1"
+        env["VICTORY_PORT_CONSTANTS"] = "1"
+        env["VICTORY_EARLY_DEPTH"] = "1"
         env["VICTORY_NO_WATCHDOG"] = "1"
 
     rt_hashes_file = ENGINE / "scripts" / "rt_off_hashes.txt"
@@ -811,7 +819,7 @@ def launch_game(cfg, developer):
                     f"Engine: {engine}",
                     f"Engine build: {datetime.fromtimestamp(engine.stat().st_mtime).isoformat(timespec='seconds')}",
                     f"Console: {console} | FastGPU: {int(fast_gpu)} | BVH: {int(bvh_builder)}",
-                    f"GPU opts: Scale={env.get('VICTORY_RENDER_SCALE', '1')} | OwnUpscaler={env.get('VICTORY_OWN_UPSCALER', '0')} | Compose={env.get('VICTORY_COMPOSE', '0')} | BVHMiss={env.get('VICTORY_BVH_MISS', '0')} | NanScrub={env.get('VICTORY_NAN_SCRUB', '0')} | Ambient={env.get('VICTORY_AMBIENT', 'off')}(air={env.get('VICTORY_AMBIENT_AIR', '')},most={env.get('VICTORY_AMBIENT_MOST', '')}) | SkipRT={len(env.get('VICTORY_SKIP_PIPELINES', '').splitlines())} | DynSlots={env.get('VICTORY_DYNAMIC_SLOTS', '')} | CardBuf={env.get('VICTORY_CARD_BUFFERS_MB')}MB(min={env.get('VICTORY_CARD_BUFFERS_MIN_MB', '1')}MB) | WinBAR={env.get('VICTORY_WINDOWS_BAR_MB', '0')}MB | Relay={env.get('VICTORY_RELAY', '0')}/CardSteps={env.get('VICTORY_CARD_STEPS', '0')}/NoWait={env.get('VICTORY_TEXTURE_NO_WAIT', '0')}",
+                    f"GPU opts: Scale={env.get('VICTORY_RENDER_SCALE', '1')} | OwnUpscaler={env.get('VICTORY_OWN_UPSCALER', '0')} | Compose={env.get('VICTORY_COMPOSE', '0')} | Sharp={env.get('VICTORY_SHARPEN', '0')} | EarlyDepth={env.get('VICTORY_EARLY_DEPTH', '0')} | PortConst={env.get('VICTORY_PORT_CONSTANTS', '0')} | WCNoBack={env.get('VICTORY_WC_NO_BACK', '0')} | BVHMiss={env.get('VICTORY_BVH_MISS', '0')} | NanScrub={env.get('VICTORY_NAN_SCRUB', '0')} | Ambient={env.get('VICTORY_AMBIENT', 'off')}(air={env.get('VICTORY_AMBIENT_AIR', '')},most={env.get('VICTORY_AMBIENT_MOST', '')}) | SkipRT={len(env.get('VICTORY_SKIP_PIPELINES', '').splitlines())} | DynSlots={env.get('VICTORY_DYNAMIC_SLOTS', '')} | CardBuf={env.get('VICTORY_CARD_BUFFERS_MB')}MB(min={env.get('VICTORY_CARD_BUFFERS_MIN_MB', '1')}MB) | WinBAR={env.get('VICTORY_WINDOWS_BAR_MB', '0')}MB(WinKB={env.get('VICTORY_WINDOW_KB', '4096')},Tails={env.get('VICTORY_WINDOW_TAILS', '0')}) | Relay={env.get('VICTORY_RELAY', '0')}/CardSteps={env.get('VICTORY_CARD_STEPS', '0')}/NoWait={env.get('VICTORY_TEXTURE_NO_WAIT', '0')}",
                     f"Direct3D debug: {env.get('VICTORY_D3D12_DEBUG', '0')} | Surface: {env.get('VICE_SURFACE_STATS', '0')} | WARP: {env.get('VICTORY_D3D12_WARP', '0')}",
                 ]
                 for h in header:
