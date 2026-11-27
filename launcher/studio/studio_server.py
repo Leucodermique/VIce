@@ -260,17 +260,16 @@ def _sync_smooth_motion_exe(src: Path) -> Path:
 
 
 def resolve_engine(version, smooth_motion=True):
-    diag_exe = ENGINE / "target" / "diag" / "victory.exe"
     release_exe = ENGINE / "target" / "release" / "victory.exe"
+    diag_exe = ENGINE / "target" / "diag" / "victory.exe"
     debug_exe = ENGINE / "target" / "debug" / "victory.exe"
     pick = lambda p: _sync_smooth_motion_exe(p) if smooth_motion else p
     if not version or version == "victory.exe":
-        # VIctory-NVIDIA needs the diag build (release + Thin LTO + diagnostics) so
-        # VICTORY_SKIP_PIPELINES (scripts/rt_off_hashes.txt) is active.
-        if diag_exe.is_file():
-            return pick(diag_exe)
+        # Prefer release (no diagnostics/copystat overhead; VICTORY_LEAVE_OUT & RT/water auto-skip work in release).
         if release_exe.is_file():
             return pick(release_exe)
+        if diag_exe.is_file():
+            return pick(diag_exe)
         return debug_exe
     if version == "victory-diag.exe":
         return pick(diag_exe) if diag_exe.is_file() else diag_exe
@@ -313,15 +312,15 @@ def file_meta(path, alias=None):
 
 
 def list_versions():
-    diag_exe = ENGINE / "target" / "diag" / "victory.exe"
     release_exe = ENGINE / "target" / "release" / "victory.exe"
+    diag_exe = ENGINE / "target" / "diag" / "victory.exe"
     debug_exe = ENGINE / "target" / "debug" / "victory.exe"
-    primary = diag_exe if diag_exe.is_file() else (release_exe if release_exe.is_file() else debug_exe)
+    primary = release_exe if release_exe.is_file() else (diag_exe if diag_exe.is_file() else debug_exe)
     items = []
     if primary.is_file():
         items.append(file_meta(primary, alias="victory.exe"))
-    if release_exe.is_file() and primary != release_exe:
-        items.append(file_meta(release_exe, alias="victory-release.exe"))
+    if diag_exe.is_file() and primary != diag_exe:
+        items.append(file_meta(diag_exe, alias="victory-diag.exe"))
     if debug_exe.is_file() and primary != debug_exe:
         items.append(file_meta(debug_exe, alias="victory-debug.exe"))
     vdir = ENGINE / "launcher" / "versions"
@@ -686,45 +685,48 @@ def launch_game(cfg, developer):
     env["VICTORY_DYNAMIC_SLOTS"] = "524288"
     env["VICTORY_HEAP_RECHECK_EVERY"] = "30"
 
-    # Fast loading & sharp streaming tuned for 8 GB VRAM / 16 GB RAM:
-    # - PRELUDE_UPLOADS + SHOW_NEW_LATER + TEXTURE_POOL + NO_WAIT + LEVELS_ON_DEMAND=0: rapid scene loads.
+    # Fast loading & sharp streaming strictly calibrated for 8 GB VRAM / 16 GB RAM:
+    # - Keep VICTORY_TEXTURE_POOL=0 and ROOM_PERCENT <= 80% with DLSS (72% with FG)
+    #   so Streamline/DLSS NEVER hits `out of VRAM (39)` on an 8 GB RTX 4070 Laptop.
+    # - Keep VICTORY_PRELUDE_UPLOADS=0 and LATE_WAIT_LISTS=128 so D3D12 command lists
+    #   do not consume 4+ GB of private RAM on a 16 GB PC.
     # - DROP_MIPS=1: 4x less VRAM on >=2K environment textures while keeping 100% native mip 0 on faces/HUD.
     # - PIPELINE_BOOK=1: records used pipelines for instant warm loading on subsequent launches.
-    env["VICTORY_TEXTURE_POOL"] = "1"
+    env["VICTORY_TEXTURE_POOL"] = "0"
     env["VICTORY_RIPE_BLOCKS"] = "0"
     env["VICTORY_TEXTURE_NO_WAIT"] = "1"
     env["VICTORY_TEXTURE_CATCHUP"] = "0"
     env["VICTORY_TEXTURE_STAGE_MS"] = "16"
     env["VICTORY_TEXTURE_STAGE_MB"] = "256"
     env["VICTORY_LEVELS_ON_DEMAND"] = "0"
-    env["VICTORY_PRELUDE_UPLOADS"] = "1"
+    env["VICTORY_PRELUDE_UPLOADS"] = "0"
     env["VICTORY_SHOW_NEW_LATER"] = "1"
     env["VICTORY_POOL_SMALL"] = "0"
     env["VICTORY_TABLED_REREAD"] = "1"
     env["VICTORY_QUEUE_HOST_TEXTURES"] = "0"
     env["VICTORY_TEXTURE_DROP_MIPS"] = "1"
-    env["VICTORY_TEXTURE_ROOM_PERCENT"] = "80" if framegen_wanted else "95"
-    env["VICTORY_TEXTURE_AWAY_MS"] = "8000"
+    env["VICTORY_TEXTURE_ROOM_PERCENT"] = "72" if framegen_wanted else ("80" if dlss_wanted else "90")
+    env["VICTORY_TEXTURE_AWAY_MS"] = "5000"
     env["VICTORY_EARLY_TEXTURES_MS"] = "16"
     env["VICTORY_BAKE_TEXTURES_MS"] = "2500"
-    env["VICTORY_PIPELINE_WAIT_MS"] = "250"
+    env["VICTORY_PIPELINE_WAIT_MS"] = "150"
     env["VICTORY_PIPELINE_BOOK"] = "1"
-    env["VICTORY_LATE_WAIT_LISTS"] = "512"
+    env["VICTORY_LATE_WAIT_LISTS"] = "128"
     env["VICTORY_WIDE_THREADS"] = "12"
     env["VICTORY_LAND_THREADS"] = "10"
     env["VICTORY_LAND_SKIP"] = "1"
 
-    # VRAM & 16 GB RAM WDDM shared-memory safety budget.
+    # VRAM & 16 GB RAM WDDM shared-memory safety budget (leaves ~1.4-2.0 GB VRAM free for DLSS/FG).
     env["VICTORY_CARD_BUFFERS_MIN_MB"] = "1"
-    env["VICTORY_CARD_BUFFERS_MB"] = "768" if framegen_wanted else "896"
+    env["VICTORY_CARD_BUFFERS_MB"] = "640" if dlss_wanted else "768"
     env["VICTORY_CARD_ROOM_FOR_TARGETS_MB"] = "1024"
     env["VICTORY_WINDOWS_BAR_MB"] = "2048"
 
     # Lighting & reflections without RT (violet probe filter + specular stand-in + anti-HDR/fog flash).
-    env["VICTORY_AMBIENT"] = "off" if bvh_builder else "0.45"
+    # Note: do NOT set VICTORY_AMBIENT_ONCE=1 with level=0.55 (it halved indoor brightness into pitch black).
+    env["VICTORY_AMBIENT"] = "off" if bvh_builder else "0.55"
     env["VICTORY_AMBIENT_AIR"] = "0.06"
-    env["VICTORY_AMBIENT_MOST"] = "0.95"
-    env["VICTORY_AMBIENT_ONCE"] = "1"
+    env["VICTORY_AMBIENT_MOST"] = "1.05"
     env["VICTORY_AMBIENT_SPECULAR"] = "0" if bvh_builder else "1"
     env["VICTORY_NAN_SCRUB"] = "1"
     env["VICTORY_BVH_MISS"] = "0" if bvh_builder else "1"
