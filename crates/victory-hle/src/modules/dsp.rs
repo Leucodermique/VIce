@@ -9,25 +9,25 @@
 //! the title checks it one block later and treats a late command as an
 //! overrun. Commands complete when submitted here.
 //!
-//! The transforms themselves are not computed: the hardware takes impulse
-//! responses already in its own partitioned frequency-domain layout, which
-//! is not known. Outputs are silence, so reverb returns are dry.
-// shortcut: no convolution or block transform; outputs are zeros. Needs the
-// coprocessor's impulse response and spectrum layouts to do better.
+//! Mono convolutions of 1024-frame blocks, the only kind the title has been
+//! seen to use, are computed here ([`convolve`]): reverb, and the speakers in
+//! the world (TVs, phone calls), whose sound goes through the DSP alone.
+//! `VICTORY_DSP_CONVOLVE=0` turns that off.
+// shortcut: stereo and 512-frame convolutions and the other block transforms
+// are not computed; their outputs are zeros.
 #![allow(non_snake_case)]
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
 use std::ffi::c_void;
 use std::sync::Mutex;
 
-mod convolve;
-
 use super::xasync::E_INVALIDARG;
 use super::xgameruntime::{HRESULT, S_OK};
 use crate::{HleModule, hle_export};
 
-/// Whether mono convolutions are computed (`VICTORY_DSP_CONVOLVE=0`: off,
-/// outputs are silence as before).
+mod convolve;
+
+/// Whether mono convolutions are computed (`VICTORY_DSP_CONVOLVE=0`: not).
 fn convolve_on() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("VICTORY_DSP_CONVOLVE").is_none_or(|v| v != "0"))
@@ -357,17 +357,7 @@ mod tests {
     fn a_mono_convolution_is_computed() {
         let mut base = vec![0u8; 0x10_0000];
         let mut dsp = std::ptr::null_mut();
-        assert_eq!(
-            XDspConnectWithMaximumStreamLimit(
-                base.as_mut_ptr().cast(),
-                0x10_0000,
-                24,
-                0x80,
-                1,
-                &mut dsp
-            ),
-            S_OK
-        );
+        assert_eq!(XDspConnectWithMaximumStreamLimit(base.as_mut_ptr().cast(), 0x10_0000, 24, 0x80, 1, &mut dsp), S_OK);
         // a response of one sample, 0.5, two samples late
         let ir = convolve::layout(&[0.0, 0.0, 0.5]);
         let desc = StreamDesc {
@@ -382,12 +372,7 @@ mod tests {
         assert_eq!(XDspActivate(dsp, &desc, &mut status, &mut stream), S_OK);
         let input: Vec<f32> = (0..0x400).map(|i| (i % 7) as f32 / 7.0).collect();
         let mut output = vec![0f32; 0x400];
-        let command = Command {
-            gains: [1.0, 1.0],
-            input: input.as_ptr(),
-            output: output.as_mut_ptr(),
-            reserved: 0,
-        };
+        let command = Command { gains: [1.0, 1.0], input: input.as_ptr(), output: output.as_mut_ptr(), reserved: 0 };
         let mut ticket = 0;
         assert_eq!(XDspSubmitCommand(stream, &command, &mut ticket), S_OK);
         for n in 2..0x400 {

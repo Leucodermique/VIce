@@ -43,9 +43,6 @@ walkdir = "2.5.1"
 tempfile = "3.27.0"
 # Opus decoding for the console's audio decoder (BSD-3-Clause, pure Rust).
 opus-pure = "0.2.4"
-# Lock-free thread-local allocator (Microsoft Research) for heavy multi-threaded
-# Windows workloads with lower RAM fragmentation on 16 GB laptops.
-mimalloc = { version = "0.1.52", default-features = false }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
@@ -74,8 +71,7 @@ opt-level = 2
 
 [profile.release]
 debug = "line-tables-only"
-lto = "fat"
-codegen-units = 1
+lto = "thin"
 
 # The development build: release code generation plus the `diagnostics`
 # feature (`cargo build --profile diag -p victory --features diagnostics`),

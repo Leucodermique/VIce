@@ -357,6 +357,9 @@ fn big(at: *mut u8, size: usize, made: bool) {
     if size < BIG {
         return;
     }
+    if made && size >= 64 << 20 {
+        name_big(size);
+    }
     for (place, bytes) in BIG_AT.iter().zip(&BIG_BYTES) {
         if made {
             if place.compare_exchange(0, at as usize, Relaxed, Relaxed).is_ok() {
@@ -369,6 +372,26 @@ fn big(at: *mut u8, size: usize, made: bool) {
             return;
         }
     }
+}
+
+thread_local! {
+    /// Set while [`name_big`] logs: what it allocates is not named again.
+    static NAMING_BIG: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Logs where a block of ours of 64 MB or more is made, for the first 24:
+/// the memory census lists their sizes alone (one of 401 MB in run leak3).
+fn name_big(size: usize) {
+    if NAMING_BIG.with(|n| n.replace(true)) {
+        return;
+    }
+    static NAMED: AtomicU64 = AtomicU64::new(0);
+    if NAMED.fetch_add(1, Relaxed) < 24 {
+        let trace = std::backtrace::Backtrace::force_capture();
+        tracing::info!(mb = size >> 20, "a block of ours of 64 MB or more made:
+{trace}");
+    }
+    NAMING_BIG.with(|n| n.set(false));
 }
 
 /// The sizes of our own big blocks alive, largest first, in MB.
@@ -857,7 +880,7 @@ fn log_memory() {
     // code has allocated.
     let alive: Vec<u64> = crate::host::ALIVE.iter().map(|a| a.load(Relaxed)).collect();
     let window = crate::shadow::window_use();
-    let (views, views_by_kind) = crate::descriptor::views_kept();
+    let views = crate::descriptor::views_kept();
     let own: Vec<u64> = (0..8).map(owned).collect();
     tracing::info!(
         "memory, what holds it: {} host lists alive; their scratch memory: {} chunks {:.0} MB, of          them {} chunks {:.0} MB spare ({} taken from the spare ones so far); their other upload          buffers: {} alive {:.0} MB; windows outside buffers (grid {} KiB): {:.0} MB of their          pages ever copied, {} shown by descriptor slots {:.0} MB, {} held by lists or the pass          over the heap {:.0} MB, {} asked for without a length {:.0} MB; buffer views of the heap          whose slot showed another copy than the one brought up to date: {}; distinct views          kept: {} ({} free) {:.0} MB; our own allocations: {:.0} MB in {} blocks (under 4 KiB          {:.0} MB in {}, to 64 KiB {:.0} MB in {}, to 1 MiB {:.0} MB in {}, larger {:.0} MB in {})",
@@ -900,7 +923,7 @@ fn log_memory() {
         "memory, more: views named whole in their records since the start: {} constant buffer \
          views, {} views of placed memory; of the view table's entries {} are constant buffer \
          views and {} views of placed memory; shapes of placed views kept: {}; host lists: {} \
-         made by the host, {} preludes made for them, private bytes grew {:.0} MB while \
+         made by the host, {} preludes made for them ({} alive), private bytes grew {:.0} MB while \
          lists were made; twins of depth textures: {:.0} MB; host copies of \
          placed textures whose title memory is not mapped any more (estimate): {:.0} MB, of \
          them still shown by a descriptor slot {:.0} MB; the pipeline library's mapped file \
@@ -912,31 +935,13 @@ fn log_memory() {
         views[5],
         lists[0],
         lists[1],
+        crate::host::PRELUDES_ALIVE.load(Relaxed),
         lists[2] as i64 as f64 / (1 << 20) as f64,
         mb(census[7]),
         mb(census[8]),
         mb(census[9]),
         mb(kept[6]),
         big_blocks(),
-    );
-    // The view table's entries by kind: how many of each are occupied
-    // versus on the free list now (a freed one, by what it last held), and
-    // that kind's flat share of bytes (one list slot each -- this does NOT
-    // include index/shapes' own tree overhead or spare Vec capacity, which
-    // the estimate above folds in undivided on top of the same flat share;
-    // by_resource's own memory is in neither number, and never was -- see
-    // `descriptor::kept`'s doc comment for the full scope of what this
-    // breakdown does and does not attribute).
-    tracing::info!(
-        "memory, view table by kind (occupied+free, flat MB -- not the whole byte estimate \
-         above): constant {}+{} {:.0} MB, shader {}+{} {:.0} MB, unordered {}+{} {:.0} MB, \
-         sampler {}+{} {:.0} MB, console sampler {}+{} {:.0} MB, placed {}+{} {:.0} MB",
-        views_by_kind[0][0], views_by_kind[0][1], mb(views_by_kind[0][2]),
-        views_by_kind[1][0], views_by_kind[1][1], mb(views_by_kind[1][2]),
-        views_by_kind[2][0], views_by_kind[2][1], mb(views_by_kind[2][2]),
-        views_by_kind[3][0], views_by_kind[3][1], mb(views_by_kind[3][2]),
-        views_by_kind[4][0], views_by_kind[4][1], mb(views_by_kind[4][2]),
-        views_by_kind[5][0], views_by_kind[5][1], mb(views_by_kind[5][2]),
     );
     // Round 3: whether windows hold the same memory more than once (they
     // can, once they are cut finer than 4 MiB), and how many host lists

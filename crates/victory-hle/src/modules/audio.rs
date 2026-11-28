@@ -517,7 +517,16 @@ fn pump(context: Context, voice: &mut Voice) {
         return;
     }
     while context.field(1, 31, 1) == 1 {
-        if voice.pcm.len() < SAMPLES_PER_BLOCK && !decode(context, voice) {
+        // A skipped frame or an input boundary can advance the decoder without
+        // producing samples. Publish only complete blocks, except the final
+        // padded tail. Limit empty steps so a broken looping voice cannot hold
+        // its lock or stall other voices for the whole decoding pass.
+        for _ in 0..8 {
+            if voice.pcm.len() >= SAMPLES_PER_BLOCK || !decode(context, voice) {
+                break;
+            }
+        }
+        if voice.pcm.is_empty() || (voice.pcm.len() < SAMPLES_PER_BLOCK && !voice.ended) {
             return;
         }
         // The write block is the title's too: taken modulo the ring before
@@ -549,12 +558,21 @@ fn pump(context: Context, voice: &mut Voice) {
 /// Decodes the next frame of the current input into `voice.pcm`; false
 /// when there is nothing left to decode.
 fn decode(context: Context, voice: &mut Voice) -> bool {
+    let valid = context.field(0, 20, 2);
     if voice.ended {
-        return false;
+        // The title can refill either input while the context stays enabled.
+        // Flush the previous tail once and leave the ring idle until a valid
+        // buffer is published. The decoder resets its overlap when flushed.
+        if valid == 0 {
+            return false;
+        }
+        voice.ended = false;
+        if context.field(2, 26, 5) == INPUT_INVALID {
+            context.set_field(2, 26, 6, 0);
+        }
     }
     let channels = context.channels();
     let mut current = context.field(4, 31, 1);
-    let valid = context.field(0, 20, 2);
     if valid & (1 << current) == 0 {
         if valid & (1 << (1 - current)) == 0 {
             // Out of input: the overlap tail, then nothing.
@@ -673,19 +691,18 @@ fn wake_decoder() {
             std::thread::Builder::new()
                 .name("victory XMA decoder".into())
                 .spawn(|| {
-                    // Run above GPU/memory helper threads (ABOVE_NORMAL) so heavy
-                    // texture streaming or frame prep never starves real-time XMA audio.
                     #[cfg(windows)]
-                    unsafe {
+                    {
                         use windows_sys::Win32::System::Threading::{
                             GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_HIGHEST,
                         };
-                        SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+                        // SAFETY: raising this audio decoder thread's priority prevents
+                        // XMA buffer underruns when GPU prep threads saturate CPU cores.
+                        unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST) };
                     }
                     loop {
                         xma().pump();
-                        // A 256-byte output block lasts 2.7 ms at 48 kHz mono;
-                        // wake every 1 ms (with timeBeginPeriod(1) active) to prevent underruns.
+                        // A 256-byte output block lasts 2.7 ms at 48 kHz mono; 1 ms wake keeps rings fed.
                         std::thread::park_timeout(std::time::Duration::from_millis(1));
                     }
                 })

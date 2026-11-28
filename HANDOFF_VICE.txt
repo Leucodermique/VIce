@@ -1,0 +1,228 @@
+================================================================================
+VIce — FICHIER DE PASSATION COMPLET (HANDOFF) & GUIDE DES OUTILS
+Dernière mise à jour : 2026-11-28 01:56 (Europe/Paris)
+================================================================================
+
+1. RÈGLES D'OR & CONTRAINTES STRICTES DE L'UTILISATEUR (NE JAMAIS ENFREINDRE)
+--------------------------------------------------------------------------------
+- LANGUE : Exclusivement en FRANÇAIS (réponses, explications, commentaires UI).
+- PHILOSOPHIE MOTEUR : 100 % dédié PC portables 8 Go VRAM / 16 Go RAM.
+- RENDU : 100 % NATIF + NVIDIA Smooth Motion (via target\diag\victory_sm.exe).
+  -> ZÉRO DLSS, ZÉRO FSR Frame Gen (ne JAMAIS les réactiver).
+- GRAPHISMES : L'utilisateur est TRÈS SATISFAIT de la qualité visuelle actuelle
+  (VIctory-NVIDIA 64d4931b + Series S + Compose + Sharpen 0.35 + Vibrance 0.35
+  + Ambient 0.8/1.5/Specular=1 + DropMips=2).
+  -> NE RIEN CASSER DES GRAPHISMES lors des optimisations FPS / anti-OOM !
+- SÉCURITÉ GIT : Ne JAMAIS écrire ni committer de token de bot Discord dans le
+  dépôt Git. Toujours lancer un scan anti-secret avant chaque commit/push.
+- SHELL WINDOWS : PowerShell 5.1 (ne supporte PAS `&&`). Toujours utiliser `;`
+  et `if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }`.
+- LIENS CLICABLES : Toujours formater les références fichiers en `[nom](file:///C:/...)`.
+
+
+2. MATÉRIEL CIBLE & CHEMINS CLÉS
+--------------------------------------------------------------------------------
+- Machine : HP OMEN 16 — Intel Core i7-13700HX, NVIDIA RTX 4070 Laptop 8 Go VRAM
+  (8 188 Mo physiques, budget DXGI ~7 140–7 180 Mo), 16 Go RAM (16 077 Mo),
+  écran 1920x1080 165 Hz.
+- Dépôt Git local : C:\Users\elbou\Desktop\VIce
+  - Remote GitHub projet : `vice` -> https://github.com/Leucodermique/VIce.git (branche `main`)
+  - Remote upstream fork : `nvidia` -> VIctory-NVIDIA (actuellement synchronisé sur `64d4931b`)
+  - Tag de sauvegarde pré-migration : `backup-pre-nvidia-2026-11-28` (commit `5a17b587`)
+- Jeu retail : C:\Users\elbou\Desktop\GTA6.Xbox.v1.0.2.1-CYBERLEEK\game_scarlett_master.exe
+  (SHA-256 `b99f876b74d4a77f03af5f878223b27bd647b5c35a79d5decd9f716504239e93`)
+- Exécutable lancé par VIce Studio (enregistré dans NVIDIA App pour Smooth Motion) :
+  C:\Users\elbou\Desktop\VIce\target\diag\victory_sm.exe
+  (DOIT toujours avoir le même SHA-256 que `target\release\victory.exe` et
+  `target\release\victory_sm.exe`).
+- Logs live du jeu : C:\Users\elbou\AppData\Local\VIce\launcher\play.log
+  (session précédente : play.previous.log)
+- Sessions VIce Pro Audit : C:\Users\elbou\AppData\Local\VIce\audit_sessions\<YYYY-MM-DD_HH-MM-SS>\
+  Contient : `timeline.csv`, `events.jsonl`, `shots\*.png` (captures automatiques + rafales F7).
+- Cache shaders/images : C:\Users\elbou\AppData\Local\victory\cache\
+- Board Agent Bridge : C:\Users\elbou\AppData\Local\VIce\agent_bridge\board.json
+
+
+3. COMMENT UTILISER LES OUTILS & WORKFLOWS
+--------------------------------------------------------------------------------
+
+3.1. VIce Agent Bridge (collaboration en parallèle avec ChatGPT 6.2 "Astra")
+- Rôle : L'utilisateur lance ChatGPT 6.2 ("Astra") en parallèle. On partage le
+  travail (Astra est excellente sur `compose.rs` HLSL/overlay 18 icônes PC,
+  analyse de captures, et second avis forensique).
+- Démarrer le serveur bridge (en daemon background `IsDaemon: true`) :
+    python C:\Users\elbou\Desktop\VIce\scripts\agent_bridge.py serve
+  (Écoute sur http://127.0.0.1:17655 ; à relancer après tout redémarrage serveur.)
+- Commandes CLI (toujours depuis `C:\Users\elbou\Desktop\VIce`) :
+  * Voir statut, tâches et verrous :
+      python scripts\agent_bridge.py status
+  * Lire les derniers messages :
+      python scripts\agent_bridge.py read --since <dernier_id>
+  * Envoyer un message à Astra (attention : l'argument est `--topic`, PAS `--subject`) :
+      python scripts\agent_bridge.py send --from antigravity --to astra --topic "Titre" --body "Contenu" --files "C:\chemin\fichier"
+  * Créer une tâche pour Astra ou soi-même :
+      python scripts\agent_bridge.py task --owner astra --title "Description"
+  * Marquer une tâche terminée :
+      python scripts\agent_bridge.py done <id>
+  * Poser / libérer un verrou fichier :
+      python scripts\agent_bridge.py lock --owner antigravity --files "chemin1" "chemin2"
+      python scripts\agent_bridge.py unlock --owner antigravity
+- RÈGLES STRICTES DU BRIDGE :
+  1. NE JAMAIS modifier un fichier verrouillé par `astra` (typiquement `crates/victory-gpu/src/compose.rs`).
+  2. NE JAMAIS lancer `cargo build --release` pendant qu'Astra a un verrou actif sur un fichier Rust (attendre son message de livraison + déverrouillage, sinon collision sur le lock du dossier `target/` et intégration d'une version incomplète).
+  3. Toujours vérifier et confirmer le SHA-256 final du fichier livré par Astra après compilation.
+
+3.2. Build, Tests Unitaires & Synchronisation Smooth Motion
+- Tests unitaires rapides (toujours avant build release) :
+    Set-Location 'C:\Users\elbou\Desktop\VIce'
+    python -m py_compile launcher\studio\studio_server.py
+    cargo test --locked -p victory-hle --lib -- modules::gameinput::tests::
+    cargo test --locked -p victory-gpu --lib -- resource::tests::
+    cargo test --locked -p victory-gpu --lib -- pool::tests::
+    cargo test --locked -p victory-gpu --lib -- compose::
+  (Pour les 4 tests GPU diagnostics d'Astra sur compose.rs :
+    cargo test -p victory-gpu --features diagnostics --lib compose:: -- --test-threads=1 --nocapture)
+- Build release optimisé (AVX2 via `.cargo/config.toml` + Thin LTO via `Cargo.toml`) :
+    cargo build --locked --release -p victory
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+- Synchronisation OBLIGATOIRE vers `victory_sm.exe` + vérification SHA-256 :
+    Copy-Item 'target\release\victory.exe' 'target\diag\victory_sm.exe' -Force
+    Copy-Item 'target\release\victory.exe' 'target\release\victory_sm.exe' -Force
+    Get-FileHash 'target\release\victory.exe','target\diag\victory_sm.exe','target\release\victory_sm.exe' -Algorithm SHA256 | Format-Table -AutoSize
+  (Les 3 SHA-256 doivent être STRICTEMENT IDENTIQUES.)
+- Après toute modif de `launcher\studio\studio_server.py` ou `studio.html` :
+  toujours rappeler à l'utilisateur de **fermer et rouvrir VIce Studio** (sinon
+  l'ancien processus `pythonw.exe` garde les anciens flags en mémoire).
+
+3.3. Analyse forensique des Audits Pro & `play.log`
+- Lister la dernière session d'audit :
+    Get-ChildItem 'C:\Users\elbou\AppData\Local\VIce\audit_sessions' -Directory | Sort-Object LastWriteTime -Descending | Select-Object -First 3
+- Analyser `timeline.csv` + `events.jsonl` avec Python (en filtrant `draws > 100`
+  et en ignorant les cellules vides `''`).
+- Lignes critiques à rechercher dans `play.log` :
+  * En-tête : `GPU opts:` (vérifie quels flags exacts ont été appliqués)
+  * FPS/CPU/GPU : `fps,`, `preparing per frame`, `landing per frame`, `relay per frame`
+  * VRAM / file de textures : `the texture queue's room:`, `card buffer limits`, `no card copy`
+  * Erreurs mémoire / crash : `0x8007000E`, `no upload buffer`, `no shared buffer`,
+    `no unordered-access buffer`, `host memory pressure`, `0x887A0006`, `DEVICE_HUNG`
+- Inspecter visuellement les captures `shots\*.png` directement avec `read_file`
+  (et utiliser Python/PIL dans le dossier scratch pour zoomer sur les icônes HUD/QTE).
+- Surveillance live en boucle : utiliser l'outil `schedule` (JAMAIS `sleep` dans le shell).
+
+3.4. Push GitHub sécurisé
+- Avant tout `git add` / `git commit` / `git push vice main` :
+  1. Scanner les secrets :
+       git grep -n "MTQ[0-9A-Za-z_-]\{20,\}"
+     (doit retourner 0 résultat ; vérifier aussi `git status --short` pour ne pas
+     ajouter de fichiers temporaires/logs/tokens).
+  2. Ne JAMAIS committer `target/` (déjà gitignoré).
+  3. Pousser sur `vice main` (`git push vice main`).
+
+
+4. ARCHITECTURE ACTUELLE & PATCHS VIce SUR VIctory-NVIDIA `64d4931b`
+--------------------------------------------------------------------------------
+Base moteur : `VIctory-NVIDIA` commit `64d4931b` (27 nov. 2026) :
+- Contient : Water light ON (64-lane compute corrigé sur 32-lane NVIDIA), PS4 DualShock 4
+  + PS5 DualSense avec vibrations, menu F1 avec sauvegarde immédiate, `ahead.rs`,
+  `pipeline/samplers.rs`, CPU Prep boost (`VICTORY_TEXSPK_PASS_MS=8`, `VICTORY_PASSES_HOT=1`,
+  `VICTORY_HELPER_PRIORITY=1`), et la stack mémoire `skornuta/victory-memory-stack`
+  (`VICTORY_SLOT_EVICT`, `VICTORY_ALLOCATOR_TRIM`, `VICTORY_BUDGET_PACK`,
+  `VICTORY_LIST_POOL_IDLE_S`).
+
+Patchs VIce réintégrés proprement par-dessus `64d4931b` :
+1. `Cargo.toml` : `lto = "thin"` sous `[profile.release]` (avec `.cargo/config.toml` `x86-64-v3`).
+2. `crates/victory-gpu/src/host.rs` :
+   - `D3D12_HEAP_FLAG_NONE` sans `resident()`/`mapped()` UNIQUEMENT sur les 2 buffers
+     RAM système : `upload_buffer()` et `shared_buffer_now()` (supprime ~34 s de freezes CPU).
+   - `mapped_card_buffer()`, `uav_buffer()` et `pool.rs` restent 100 % stock avec
+     `not_resident()` + `resident()` + `mapped()`.
+3. `crates/victory-gpu/src/pool.rs` :
+   - `spares()` plafonné à `8` blocs (512 Mo) au lieu de `64` (4 Go) sur GPU 8 Go (`1..=9 GiB`).
+4. `crates/victory-gpu/src/resource.rs` :
+   - `drop_mips_setting()` + `drop_mips_for()` branchés dans `base_level()` et `hosted()` :
+     `VICTORY_TEXTURE_DROP_MIPS=2` réduit uniquement les textures 2D streamées `>= 2048px`
+     (plancher `512px`), en gardant `<= 1024px` (visages, yeux, HUD) 100 % natifs.
+5. `crates/victory-gpu/src/compose.rs` + `crates/victory-gpu/src/pc_prompts_atlas.bin` :
+   - Overlay 18 icônes PC (`2304x128`, SHA-256 atlas `60e66cdd...`, SHA-256 compose.rs
+     `380BDDD1CCBBF89B6BACC3852AB34073FF560BC74217423206B757B1D865A224`, livré par Astra Task #7).
+   - Indices atlas : `0=CLIC D`, `1=CLIC G`, `2=TAB`, `3=G`, `4=MAJ`, `5=R`, `6=ESPACE`,
+     `7=F`, `8=E`, `9=C`, `10=CTRL`, `11=V`, `12=T`, `13=ALT`, `14=B`, `15=H`, `16=ZQSD`, `17=ECHAP`.
+   - Préserve les anneaux QTE et l'animation native au pixel près (`écart <= 1`),
+     corrige QTE `056` (zéro faux positif souris), `Y ARGENT` (`053`), `EMPLOYÉ LT` (`049`).
+6. `crates/victory-gpu/src/lib.rs` : ré-exporte `pub use compose::set_real_pad_connected;`.
+7. `crates/victory-hle/src/modules/lifecycle.rs` :
+   - Libération auto curseur dans menu `F1` (`SETTINGS_MENU_OPEN` via `WM_SYNC_MOUSE_CAPTURE`),
+     libération auto sur `Échap`/`P` (menu Pause), toggle `F8`, re-capture fluide sur `Clic Droit`
+     en jeu, et `free_mouse_delta()` pour que le menu Pause reçoive la souris librement.
+8. `crates/victory-hle/src/modules/gameinput.rs` :
+   - Mapping complet PC AZERTY (et QWERTY) : `Z/Q/S/D` (LS), Souris + `I/J/K/L` (RS),
+     `Clic D`/`U` (LT), `Clic G`/`O` (RT), `Espace`/`W` (X), `E`/`Maj`/`Entrée` (A),
+     `R`/`Retour`/`Souris X2` (B), `F` (Y), `Tab`/`A` (LB), `G`/`X`/`Souris X1` (RB),
+     `Ctrl` (L3), `C`/`Clic Molette` (R3), `V`/`M` (View), `T`/`Alt`/`B`/`H`+Flèches (D-Pad),
+     `Échap`/`P` (Menu).
+   - Sensibilité souris augmentée (`0.072`, `smooth 0.84`) + `VICTORY_MOUSE_WARP=1`.
+   - Garde `playstation` (PS4+PS5+rumble) + `set_real_pad_connected(any_pad)`.
+9. `crates/victory-hle/src/modules/audio.rs` : `THREAD_PRIORITY_HIGHEST` + `park_timeout(1ms)`.
+10. `launcher/studio/studio_server.py` + `launcher/studio/studio.html` : profil 8 Go natif
+    + Smooth Motion et légende des touches PC.
+
+
+5. ERREURS RÉSOLUES À NE JAMAIS RÉPÉTER (LISTE NOIRE)
+--------------------------------------------------------------------------------
+- NE JAMAIS activer `VICTORY_AMBIENT_REFLECT` (causait blocs orange en escalier + neige RGB
+  sur les vitres ; remplacé par `VICTORY_AMBIENT_SPECULAR=1` sur `CS_RayMiss`).
+- NE JAMAIS mettre `VICTORY_WINDOWS_BAR_MB=1536` sur 8 Go VRAM (mangeait 1,5 Go de VRAM
+  inutilement -> paging PCIe -> 3,1 FPS / 268 ms GPU ; doit rester à `0`).
+- NE JAMAIS plafonner `VICTORY_CARD_BUFFERS_MB` trop bas comme `768` (saturait `767/768`,
+  forçait les compute shaders à lire sur le bus PCIe -> 3 FPS / 268 ms GPU, cf. `shadow.rs:180-187`).
+- NE JAMAIS laisser `VICTORY_CARD_ROOM_FOR_TARGETS_MB=3072` par défaut sur Series S :
+  en Series S les render targets culminent à ~1 395 Mo (< 3072/2 = 1 536 Mo), donc
+  `targets_kept()` gardait 1 677 Mo de réserve fantôme à vie et bloquait le chargement
+  des textures (visage caissière noir). Solution prouvée : `1600` sur Series S (`2400` Series X)
+  + `VICTORY_CARD_ROOM_FOR_TARGETS_SETTLE_MS=10000`.
+- NE JAMAIS retirer `not_resident()`/`resident()`/`mapped()` sur `mapped_card_buffer()`,
+  `uav_buffer()` ou `pool.rs` (uniquement sur `upload_buffer()` et `shared_buffer_now()`).
+- NE JAMAIS réutiliser `rt_off_hashes.txt` (droppait 2 723 draws/frame utiles au braquage ;
+  garder `VICTORY_LEAVE_OUT=02384a60fda6f2d0,731a39171b568298` + `VICTORY_SKIP_PIPELINES=none`).
+- NE JAMAIS oublier `VICTORY_MOUSE_WARP=1` avec `VICTORY_MOUSE_CAPTURE=1` (sinon la caméra
+  bloque sur les bords de la fenêtre).
+
+
+6. PROBLÈME ACTIF EN COURS (AUDIT `2026-11-28_01-45-37`)
+--------------------------------------------------------------------------------
+Constat sur la session de 8 min (`01:45:55` -> `01:53:40`, 72 shots, build `1096C8CA...`) :
+- Touches PC + souris + graphismes + prison : VALIDÉS !
+  * Prison (`01:48–01:52`) : 14.7–16.1 FPS natifs (max 18.7 = ~30–37 FPS Smooth Motion),
+    `GPU = 0.0–4.8 ms` (médiane `0.1 ms` !), `TexWait` descendu à `1 083`, `RAMfree ~770 Mo`.
+- MAIS DÈS L'ENTRÉE AU BRAQUAGE (`01:52:36` -> `01:53:30`) : CHUTE FPS PUIS CRASH !
+  * `00:52:36` : `Texture sweep spike 435.6 ms` ; VRAM `7 231 Mo` (`- 790 Mo free in texture blocks`).
+  * `00:52:36` -> `00:53:24` : VRAM grimpe inexorablement :
+      7 231 -> 7 255 -> 7 298 -> 7 318 -> 7 352 -> 7 637 -> 7 756 -> 7 803 -> 7 907 -> 7 933 Mo
+      (en NVML physique : **8 156 / 8 188 Mo** !!) alors que `free in texture blocks` monte à `955 Mo` !
+  * `00:53:06` : début du spam `0x8007000E (E_OUTOFMEMORY)` : **39 524 erreurs**
+    (`no upload buffer`, `no shared buffer`, `no unordered-access buffer`) !
+  * `00:53:30` : **`DXGI_ERROR_DEVICE_HUNG (0x887A0006)`** -> CRASH `Exit code 2289696773` !
+
+Causes probables à investiguer immédiatement après le push :
+1. **`VICTORY_CARD_BUFFERS_MB=1536`** : dans `shadow.rs:225`, la limite ne compte PAS les
+   `"before" twins` (chaque buffer écrit par shader prend 2x sa taille !). 1 536 Mo * ~1.5-2
+   + ~1 400 Mo render targets + ~2 500 Mo textures + ~955 Mo de fragmentation blocs pool
+   = **> 8 188 Mo physiques** dès que le braquage alloue ses nouveaux buffers/RT !
+   -> Comparer avec `VICTORY_CARD_BUFFERS_MB=1024` ou `1152` (le défaut `shadow.rs` pour 8 Go
+   est 18 % de 7 180 Mo = `1 292 Mo` ; `1536` est AU-DESSUS du défaut !).
+2. **`VICTORY_SLOT_EVICT=1` + fragmentation pool 64 Mo** : `slot_evict` a évincé des textures
+   dans des blocs de 64 Mo sans libérer les blocs (`free in texture blocks` monté à `955 Mo`
+   alors que `in use` a GRIMPÉ de `+702 Mo` !), ET/OU a déclenché un `sweep spike 435.6 ms`
+   + re-uploads qui ont saturé la commit charge Windows (16 Go RAM) et la VRAM (8 Go) !
+3. **`no upload buffer` / `no shared buffer` (`size=4194304`)** : vérifier dans `play.log`
+   d'où viennent exactement les `+702 Mo` entre `00:52:36` et `00:53:24` (est-ce `card copies`,
+   `render targets`, `textures`, `staging`, `uav_buffer`, `slot_evict` ?), et vérifier
+   comment `pool.rs` / `residency.rs` / `resource.rs` réagissent sur 8 Go VRAM / 16 Go RAM.
+
+
+7. JOURNAL D'AVANCEMENT EN TEMPS RÉEL (MIS À JOUR AU FIL DES FIXES)
+--------------------------------------------------------------------------------
+[2026-11-28 01:56] Création de HANDOFF_VICE.txt avant push GitHub de l'état
+  `VIctory-NVIDIA 64d4931b + compose.rs #7 + inputs AZERTY complets + souris menus + sensi 0.072`.
+  Prochaine étape immédiate : `git commit` + `git push vice main`, puis diagnostic
+  exact des `+702 Mo` VRAM & `39 524` erreurs `0x8007000E` du braquage (`01-45-37`).

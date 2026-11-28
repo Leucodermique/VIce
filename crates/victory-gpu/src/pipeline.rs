@@ -130,14 +130,10 @@ pub(crate) struct Translated {
     /// A compute program's threads in a group.
     pub(crate) threads: Option<[u32; 3]>,
     pub(crate) used: Vec<victory_shader::UsedResource>,
+    pub(crate) tables: crate::draw::TablePlan,
     /// Whether the shader's code can store to buffer memory ([`stores`]);
     /// true when its code is not known.
     pub(crate) stores: bool,
-    /// Per [`Translated::used`] entry: a store or atomic names that buffer
-    /// descriptor. Empty when the code is not known.
-    pub(crate) used_written: Vec<bool>,
-    /// A buffer store whose descriptor could not be matched to `used`.
-    pub(crate) write_unknown: bool,
     /// Whether it can store through raw addresses ([`stores_by_address`]).
     pub(crate) stores_by_address: bool,
     /// Whether it stores through a view it picks from the heap by an index,
@@ -217,27 +213,23 @@ fn translate(container: &[u8]) -> Result<Translated, String> {
         _ => None,
     });
     let stores_by_address = programs.is_empty() || programs.iter().any(stores_by_address);
-    let chosen = programs.iter().find(|p| {
-        matches!(
-            p.stage,
-            HwStage::Vs | HwStage::Ps | HwStage::Ms | HwStage::Cs
-        )
-    });
-    let used = chosen.map(|p| p.used.to_vec()).unwrap_or_default();
-    let (used_written, mut write_unknown) = chosen
-        .map(|p| written_used(p, &used))
-        .unwrap_or((Vec::new(), !programs.is_empty()));
-    if programs.len() > 1 {
-        // Another stage's table store could name the same descriptor.
-        write_unknown = true;
-    }
+    let used = programs
+        .into_iter()
+        .find(|p| {
+            matches!(
+                p.stage,
+                HwStage::Vs | HwStage::Ps | HwStage::Ms | HwStage::Cs
+            )
+        })
+        .map(|p| p.used)
+        .unwrap_or_default();
+    let tables = crate::draw::TablePlan::new(&used, &host.root_indexed_views);
     Ok(Translated {
         host,
         threads,
         used,
+        tables,
         stores,
-        used_written,
-        write_unknown,
         stores_by_address,
         picks: Default::default(),
     })
@@ -397,70 +389,6 @@ fn stores(program: &victory_shader::NativeProgram) -> bool {
     })
 }
 
-/// Which [`Translated::used`] buffer descriptors a store or atomic names.
-/// The descriptor is the instruction's `rsrc`/SMEM base SGPR; a store whose
-/// descriptor is computed in VGPRs, or names a descriptor outside `used`,
-/// leaves [`Translated::write_unknown`] set.
-#[cfg(windows)]
-fn written_used(
-    program: &victory_shader::NativeProgram,
-    used: &[victory_shader::UsedResource],
-) -> (Vec<bool>, bool) {
-    use victory_shader::gfx10::{Encoding, Fields, Operand, decode};
-    let Ok(code) = decode(&program.code) else {
-        return (vec![true; used.len()], true);
-    };
-    let mut written = vec![false; used.len()];
-    let mut unknown = false;
-    for inst in code.iter() {
-        let name = inst.name();
-        let is_store = match inst.encoding {
-            Encoding::Mubuf | Encoding::Mtbuf | Encoding::Smem => {
-                name.is_none_or(|n| (n.contains("store") || n.contains("atomic")) && !n.contains("scratch"))
-            }
-            Encoding::Flat | Encoding::Global => {
-                if name.is_none_or(|n| (n.contains("store") || n.contains("atomic")) && !n.contains("scratch")) {
-                    unknown = true;
-                }
-                false
-            }
-            Encoding::Sop1 => {
-                if name.is_none_or(|n| matches!(n, "s_setpc_b64" | "s_swappc_b64")) {
-                    unknown = true;
-                }
-                false
-            }
-            _ => false,
-        };
-        if !is_store {
-            continue;
-        }
-        let fields = inst.fields(program.wave64);
-        let descriptor = match &fields {
-            Fields::Buffer { rsrc, .. } => Some(rsrc),
-            Fields::Smem { base, .. } => Some(base),
-            _ => None,
-        };
-        let Some(Operand::Scalar { code, .. }) = descriptor else {
-            unknown = true;
-            continue;
-        };
-        let mut hit = false;
-        for (i, resource) in used.iter().enumerate() {
-            if resource.kind == victory_shader::ResourceType::Uav
-                && resource.lower_bound == u32::from(*code)
-            {
-                written[i] = true;
-                hit = true;
-            }
-        }
-        if !hit {
-            unknown = true;
-        }
-    }
-    (written, unknown)
-}
-
 /// Whether a console program can store to memory through raw addresses
 /// (`crate::memory`): a flat or global store or atomic, or code that does
 /// not decode. The programs that only walk ray-tracing structures do not,
@@ -531,25 +459,17 @@ pub(crate) fn host_pipeline<'a>(this: This) -> Option<&'a host::HostPipeline> {
     make::ready(&pipeline(this).host)
 }
 
-/// LOCAL (fxceless a35c557393): as [`host_pipeline`], for a draw into views
-/// of the formats `bound`: if one has another format than the pipeline
-/// declares for its slot, the host pipeline made for the bound formats.
-#[cfg(windows)]
-pub(crate) fn host_pipeline_for<'a>(this: This, bound: &host::TargetFormats) -> Option<&'a host::HostPipeline> {
-    if this.is_null() {
-        return None;
-    }
-    let p = &pipeline(this).host;
-    if p.formats != *bound && host::formats_differ(&p.formats, bound) {
-        return make::for_formats(p, bound);
-    }
-    make::ready(p)
-}
-
 /// Host pipelines queued and not made yet.
 #[cfg(windows)]
 pub(crate) fn making() -> u64 {
     make::waiting()
+}
+
+/// Draws and dispatches asked of pipelines left out on purpose since the last
+/// call (ray-tracing passes without the structure builder).
+#[cfg(windows)]
+pub(crate) fn take_left_out() -> u64 {
+    make::take_left_out()
 }
 
 /// Draws and dispatches dropped since the last [`take_drops`], by reason
@@ -557,8 +477,8 @@ pub(crate) fn making() -> u64 {
 #[cfg(all(windows, feature = "diagnostics"))]
 static DROPS: Mutex<Option<HashMap<String, u64>>> = Mutex::new(None);
 
-/// Shader hashes as printed in the pipeline diagnostics (active in both release & diag builds).
-#[cfg(windows)]
+/// Shader hashes as printed in the pipeline diagnostics.
+#[cfg(all(windows, feature = "diagnostics"))]
 fn parse_skip_hashes(value: &str) -> Vec<String> {
     value
         .split(',')
@@ -578,7 +498,7 @@ fn parse_skip_hashes(value: &str) -> Vec<String> {
         .collect()
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, feature = "diagnostics"))]
 fn skipped_shader(p: &Pipeline) -> Option<&str> {
     static HASHES: OnceLock<Vec<String>> = OnceLock::new();
     let hashes = HASHES.get_or_init(|| {
@@ -594,7 +514,7 @@ fn skipped_shader(p: &Pipeline) -> Option<&str> {
         .map(|shader| shader.hash.as_str())
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, feature = "diagnostics"))]
 pub(crate) fn is_skipped(this: This) -> bool {
     !this.is_null() && skipped_shader(pipeline(this)).is_some()
 }
@@ -850,6 +770,8 @@ pub mod known;
 mod library;
 #[cfg(windows)]
 mod make;
+#[cfg(windows)]
+pub(crate) mod samplers;
 
 /// Lets the pipeline library's mapped file go from memory when no pipeline
 /// has loaded for a while (`library::trim`); called by the host's sweep.
