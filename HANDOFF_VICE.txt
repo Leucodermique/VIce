@@ -222,7 +222,53 @@ Causes probables à investiguer immédiatement après le push :
 
 7. JOURNAL D'AVANCEMENT EN TEMPS RÉEL (MIS À JOUR AU FIL DES FIXES)
 --------------------------------------------------------------------------------
-[2026-11-28 01:56] Création de HANDOFF_VICE.txt avant push GitHub de l'état
-  `VIctory-NVIDIA 64d4931b + compose.rs #7 + inputs AZERTY complets + souris menus + sensi 0.072`.
-  Prochaine étape immédiate : `git commit` + `git push vice main`, puis diagnostic
-  exact des `+702 Mo` VRAM & `39 524` erreurs `0x8007000E` du braquage (`01-45-37`).
+[2026-11-28 01:56] Création de HANDOFF_VICE.txt et push GitHub réussi (commit
+  `101dee28` sur `vice/main`, 0 secret détecté).
+
+[2026-11-28 01:59] DIAGNOSTIC COMPLET + CORRECTIF BRAQUAGE (`01-45-37`) :
+  - Constat exact dans `play.log` + Windows WMI :
+    * `CommitLimit = 30 902 Mo` (16 077 Mo RAM + 14 824 Mo `pagefile.sys`, seulement
+      17,6 Go libres sur `C:`).
+    * À `00:52:00` (fin prison, avant le braquage), `VICTORY_TEXTURE_ROOM_PERCENT=90`
+      + soustraction des `825–956 Mo free in texture blocks` (blocs de 64 Mo fragmentés)
+      laissait déjà la VRAM réelle à `6 948–7 144 Mo / 7 180 Mo` (97–99,5 % du budget !).
+    * Dès `00:52:02` (entrée au braquage), `shadow.rs` a refusé les nouveaux card buffers
+      (`no card copy`: `12 -> 352` buffers refusés, `930 -> 913 Mo`) parce que
+      `in use > 6 938 Mo` -> `Copy` CPU a explosé de `15 ms -> 56–108 ms` -> chute à 2,6–5,7 FPS.
+    * Puis les +800–985 Mo de ressources de scène obligatoires du braquage ont poussé
+      la VRAM de `7 144 -> 7 933 Mo` (`8 156 / 8 188 Mo` NVML physiques), saturant
+      VRAM + Commit Charge -> `38 303 × 0x8007000E (E_OUTOFMEMORY)` sur les 3 heaps
+      (`upload_buffer` 27 203x, `unordered-access` 8 997x, `shared_buffer` 3 478x)
+      à `00:53:06` -> crash `DXGI_ERROR_DEVICE_HUNG (0x887A0006)` à `00:53:30`.
+  - Correctif appliqué dans `launcher/studio/studio_server.py` (zéro recompilation,
+    zéro perte graphique) :
+    * `VICTORY_TEXTURE_ROOM_PERCENT=78` (ligne 5 600 Mo au lieu de 6 461 Mo -> garde
+      ~900 Mo de marge VRAM réelle avant le braquage pour absorber les +800 Mo de scène
+      ET garder `in use < 6 938 Mo` pour que `shadow.rs` ne refuse plus les card buffers !).
+    * `VICTORY_SLOT_EVICT_PERCENT=78`, `VICTORY_SLOT_EVICT_LOW_PERCENT=68`,
+      `VICTORY_SLOT_EVICT_MB=384` (évince les textures diner/prison plus tôt pour vider
+      des blocs de 64 Mo complets avant le braquage).
+    * `VICTORY_CARD_BUFFERS_MB=1152` (couvre les 930 Mo + ~220 Mo braquage tout en
+      réduisant le pic `"before" twins` en VRAM).
+    * `VICTORY_LIST_POOL_IDLE_S=15` (libère les command list pools 2x plus vite).
+  - ÉTAPES SUIVANTES POUR LE PROCHAIN AGENT / TEST UTILISATEUR :
+    1. L'utilisateur doit FERMER et ROUVRIR VIce Studio pour charger ce nouveau
+       `studio_server.py`, puis retester le passage Prison -> Braquage avec Audit Pro.
+    2. Vérifier dans le prochain `play.log` :
+       - `in use` avant braquage autour de `~6 000–6 300 Mo` (au lieu de `7 144 Mo`) ;
+       - `no card copy` proche de `0` au braquage ;
+       - `0` erreur `0x8007000E` et `0` crash `0x887A0006` ;
+       - FPS braquage maintenus vers 13–17 FPS natifs (26–34 FPS Smooth Motion).
+    3. SI malgré `Room=78%` + `SlotEvict=78/68%`, la VRAM dépasse encore `7 180 Mo`
+       au braquage à cause de la fragmentation des blocs de 64 Mo (`free in texture blocks`
+       ~950 Mo dans `pool.rs`), la piste Rust suivante (pour le prochain agent) est :
+       - dans `crates/victory-gpu/src/pool.rs`, réduire `BLOCK` de `64 << 20` à `16 << 20`
+         (ou `32 << 20`) sur GPU `<= 9 GiB`, afin de diviser par 2 à 4 les trous
+         fragmentés de `956 Mo` et permettre aux blocs évincés par `slot_evict` de se
+         libérer réellement en VRAM !
+       - ET dans `crates/victory-gpu/src/resource.rs` `room()`, ne plus soustraire
+         100 % de `free in texture blocks` quand `used > budget * 85%` (plafonner la
+         déduction ou comparer `used` brut contre `budget * 90%`).
+    4. Vérifier aussi visuellement les captures braquage (`056` QTE ESPACE + `053` Y ARGENT)
+       pour valider le correctif #7 d'Astra en jeu réel.
+
